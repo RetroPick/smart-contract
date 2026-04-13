@@ -1,0 +1,66 @@
+=== Toolchain ===
+foundry
+=== Source (with line counts) ===
+ 1418 src/MarketEngine.sol
+  144 src/adapters/ChainlinkAdapter.sol
+   13 src/interfaces/IPriceOracle.sol
+   13 src/interfaces/IPriceOracleWithRoundId.sol
+   57 src/logic/Resolvers.sol
+  187 src/math/MarketMath.sol
+  282 src/types/MarketTypes.sol
+ 2114 total
+=== nSLOC ===
+src/MarketEngine.sol: 1231
+src/adapters/ChainlinkAdapter.sol: 93
+src/interfaces/IPriceOracle.sol: 7
+src/interfaces/IPriceOracleWithRoundId.sol: 7
+src/logic/Resolvers.sol: 49
+src/math/MarketMath.sol: 159
+src/types/MarketTypes.sol: 231
+TOTAL: 1777
+=== NatSpec ===
+8
+=== test_files ===
+28
+=== test_functions ===
+86
+=== stateless_fuzz ===
+2
+=== foundry_invariant ===
+0
+=== echidna ===
+0:0
+=== medusa ===
+0:0
+=== hardhat_fuzz ===
+0
+=== fork ===
+0
+=== certora ===
+0:0
+=== halmos ===
+1:0
+=== hevm ===
+0
+=== scribble ===
+0:0
+=== docs ===
+README.md
+README.md
+=== commit ===
+ec0bb56
+=== git_unique_authors ===
+1
+=== git_contributors ===
+      4 Asyam Jayanegara
+=== git_source_contributors ===
+=== git_repo_age ===
+2026-03-19T21:47:45+07:00
+2026-03-30T17:07:09+07:00
+=== git_total_commits ===
+4
+=== git_merge_count ===
+0
+=== git_hotspots ===
+=== git_recent_30d ===
+=== git_large_diffs ===

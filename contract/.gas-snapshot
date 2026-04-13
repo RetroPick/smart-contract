@@ -1,0 +1,6 @@
+EpochGasTest:test_gas_claim_afterResolve() (gas: 58028)
+EpochGasTest:test_gas_lockEpoch_direction() (gas: 88350)
+EpochGasTest:test_gas_lockEpoch_threshold() (gas: 17442)
+EpochGasTest:test_gas_openEpoch_cold() (gas: 148166)
+EpochGasTest:test_gas_resolveEpoch_direction() (gas: 146474)
+EpochGasTest:test_gas_resolveEpoch_threshold() (gas: 169875)
