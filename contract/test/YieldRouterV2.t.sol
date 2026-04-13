@@ -98,4 +98,74 @@ contract YieldRouterV2Test is Test {
         vm.expectRevert(YieldRouterV2.ReserveNotHealthy.selector);
         router.depositScaled(tid, 100e18);
     }
+
+    function test_withdraw_reverts_when_reserve_paused() public {
+        vm.prank(engine);
+        router.depositScaled(tid, 100e18);
+
+        pool.setReserveFlags(true, false, true);
+        vm.prank(engine);
+        vm.expectRevert(YieldRouterV2.ReservePaused.selector);
+        router.withdrawScaled(tid, 50e18);
+    }
+
+    function test_setTemplateYieldPath_reverts_when_balance_exists() public {
+        vm.prank(engine);
+        router.depositScaled(tid, 100e18);
+
+        vm.prank(router.owner());
+        vm.expectRevert(YieldRouterV2.CannotChangePath.selector);
+        router.setTemplateYieldPath(tid, IYieldRouterV2.YieldPath.StataToken);
+    }
+
+    function test_pendingLmRewards_returns_rewards_tuple() public {
+        rewardTok.mint(address(rewards), 50e18);
+        vm.prank(engine);
+        router.depositScaled(tid, 10e18);
+
+        (address[] memory tokens, uint256[] memory amounts) = router.pendingLmRewards(tid);
+        assertEq(tokens.length, 1);
+        assertEq(tokens[0], address(rewardTok));
+        assertEq(amounts.length, 1);
+        assertEq(amounts[0], 50e18);
+    }
+
+    function test_rescueToken_reverts_for_aToken_and_transfers_other_token() public {
+        vm.prank(router.owner());
+        vm.expectRevert(YieldRouterV2.InvalidAddress.selector);
+        router.rescueToken(address(aToken), address(this), 1);
+
+        MockERC20 stray = new MockERC20();
+        stray.mint(address(router), 123);
+        vm.prank(router.owner());
+        router.rescueToken(address(stray), address(this), 123);
+        assertEq(stray.balanceOf(address(this)), 123);
+    }
+
+    function test_emergencyWithdraw_reverts_unauthorized_and_returns_zero_when_empty() public {
+        vm.prank(address(0xABCD));
+        vm.expectRevert(YieldRouterV2.Unauthorized.selector);
+        router.emergencyWithdraw(tid);
+
+        vm.prank(engine);
+        assertEq(router.emergencyWithdraw(tid), 0);
+    }
+
+    function test_zero_rewards_controller_paths_return_empty() public {
+        YieldRouterV2 r = new YieldRouterV2(address(stake), address(pool), address(aToken), address(0), address(0), engine);
+        vm.prank(engine);
+        (address[] memory tokens, uint256[] memory amounts) = r.claimLmRewards(tid);
+        assertEq(tokens.length, 0);
+        assertEq(amounts.length, 0);
+
+        (tokens, amounts) = r.pendingLmRewards(tid);
+        assertEq(tokens.length, 0);
+        assertEq(amounts.length, 0);
+    }
+
+    function test_setTemplateYieldPath_reverts_when_stata_not_configured() public {
+        vm.prank(router.owner());
+        vm.expectRevert(YieldRouterV2.StataNotConfigured.selector);
+        router.setTemplateYieldPath(tid, IYieldRouterV2.YieldPath.StataToken);
+    }
 }

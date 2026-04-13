@@ -94,6 +94,13 @@ contract ChainlinkAdapterTest is Test {
         assertEq(price, 1e8);
     }
 
+    function test_normalize_decimals_below_8_scales_up() public {
+        MockAggregatorV3 f6 = new MockAggregatorV3(6, int256(123_456_789));
+        bytes32 id6 = bytes32(uint256(uint160(address(f6))));
+        (int256 price,,) = adapter.getNormalizedPrice(id6, 86_400, 0);
+        assertEq(price, int256(12_345_678_900));
+    }
+
     function test_revert_unsupported_decimals_over_18() public {
         MockAggregatorV3 f19 = new MockAggregatorV3(19, int256(1e19));
         bytes32 id19 = bytes32(uint256(uint160(address(f19))));
@@ -104,5 +111,14 @@ contract ChainlinkAdapterTest is Test {
     function test_feedId_round_trip() public view {
         address a = address(feed);
         assertEq(adapter.feedIdToAddress(adapter.addressToFeedId(a)), a);
+    }
+
+    function test_getNormalizedPriceWithRoundId_matches_feed_round_data() public view {
+        (uint80 roundId, int256 priceE8, uint64 publishTime, uint256 conf) =
+            adapter.getNormalizedPriceWithRoundId(feedId, 86_400, uint64(block.timestamp));
+        assertEq(roundId, 1);
+        assertEq(priceE8, int256(45_000 * 1e8));
+        assertEq(publishTime, uint64(block.timestamp));
+        assertEq(conf, 0);
     }
 }

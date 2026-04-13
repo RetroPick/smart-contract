@@ -5,6 +5,9 @@ import {MarketEngineBase} from "./MarketEngineBase.t.sol";
 import {IMarketEngine as MarketEngine} from "../src/engine/IMarketEngine.sol";
 import {MarketTypes} from "../src/types/MarketTypes.sol";
 import {IPriceOracle} from "../src/interfaces/IPriceOracle.sol";
+import {MockAavePool} from "../src/test/MockAavePool.sol";
+import {MockAToken} from "../src/test/MockAToken.sol";
+import {YieldRouterAaveV3} from "../src/yield/YieldRouterAaveV3.sol";
 
 /// @notice Rolling oracle and timing: buffers, confidence, early calls, batch.
 contract MarketEngineRollingOracleTest is MarketEngineBase {
@@ -259,5 +262,49 @@ contract MarketEngineRollingOracleTest is MarketEngineBase {
         assertEq(uint8(pB), uint8(MarketTypes.RollingPhase.Live));
         assertEq(activeB, 3);
         assertEq(lrB, 1);
+    }
+
+    function test_rolling_execute_halts_when_yield_withdraw_fails() public {
+        vm.startPrank(admin);
+        engine.upsertTemplate(_directionRollingTemplate("roll_withdraw_fail", INTER, 10));
+        bytes32 tid = _tid("roll_withdraw_fail");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        MockAToken aToken = new MockAToken();
+        MockAavePool pool = new MockAavePool(address(token), address(aToken));
+        YieldRouterAaveV3 router = new YieldRouterAaveV3(address(token), address(pool), address(aToken), address(engine));
+
+        vm.prank(admin);
+        engine.setYieldRouter(address(router), 0);
+
+        uint64 t0 = 480_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.genesisStartRolling(tid);
+
+        token.mint(address(this), 1e24);
+        token.approve(address(engine), type(uint256).max);
+        vm.warp(t0 + 50);
+        engine.depositToSide(tid, 1, 0, 20e18);
+
+        vm.warp(t0 + INTER);
+        oracle.set(feed, 100e8, t0 + INTER, 0);
+        vm.prank(worker);
+        engine.genesisLockRolling(tid);
+
+        vm.warp(t0 + 150);
+        engine.depositToSide(tid, 2, 0, 20e18);
+
+        pool.setRevertWithdraw(true);
+        vm.warp(t0 + 2 * INTER);
+        oracle.set(feed, 120e8, t0 + 2 * INTER, 0);
+        vm.prank(worker);
+        engine.executeRollingRound(tid);
+
+        (MarketTypes.RollingPhase phase, MarketTypes.RollingHaltReason reason,,,,) =
+            engine.getRollingLifecycle(tid);
+        assertEq(uint8(phase), uint8(MarketTypes.RollingPhase.Halted));
+        assertEq(uint8(reason), uint8(MarketTypes.RollingHaltReason.OracleFailure));
     }
 }

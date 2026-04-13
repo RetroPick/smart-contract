@@ -5,7 +5,23 @@ import {Test} from "forge-std/Test.sol";
 import {MarketMath} from "../../src/math/MarketMath.sol";
 import {MarketTypes as MT} from "../../src/types/MarketTypes.sol";
 
+contract MarketMathHarness {
+    function computeClaimLiabilityComponents(uint256 totalPool, uint256 winningPool, uint16 feeBps, bool feeOnLosingPool)
+        external
+        pure
+        returns (uint256 claimLiabilityTotal, uint256 settlementFee, uint256 distributableLosingPool)
+    {
+        return MarketMath.computeClaimLiabilityComponents(totalPool, winningPool, feeBps, feeOnLosingPool);
+    }
+}
+
 contract MarketMathTest is Test {
+    MarketMathHarness internal harness;
+
+    function setUp() public {
+        harness = new MarketMathHarness();
+    }
+
     function test_computeSwitch_withFee() public pure {
         (uint256 net, uint256 fee) = MarketMath.computeSwitch(10_000, 200);
         assertEq(fee, 200);
@@ -69,5 +85,15 @@ contract MarketMathTest is Test {
             splitFee += f;
         }
         assertGe(splitFee, singleFee);
+    }
+
+    function test_claimLiability_reverts_when_winning_pool_exceeds_total_pool() public {
+        vm.expectRevert(MarketMath.MathOverflow.selector);
+        harness.computeClaimLiabilityComponents(100, 101, 100, true);
+    }
+
+    function test_claimLiability_reverts_when_fee_exceeds_losing_pool() public {
+        vm.expectRevert(MarketMath.MathOverflow.selector);
+        harness.computeClaimLiabilityComponents(100, 99, 20_000, true);
     }
 }

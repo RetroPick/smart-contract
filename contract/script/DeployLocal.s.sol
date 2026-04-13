@@ -18,6 +18,12 @@ import {MarketTypes} from "../src/types/MarketTypes.sol";
 
 /// @dev Local / CI: mock token + oracle + UUPS `MarketEngine` proxy with `initialize` (no `--ffi`).
 contract DeployLocal is Script {
+    struct DeployInitParams {
+        address stakeToken;
+        address priceOracle;
+        address admin;
+    }
+
     function run() external {
         uint256 pk =
             vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
@@ -28,22 +34,9 @@ contract DeployLocal is Script {
         MarketEngineDispatcher impl = new MarketEngineDispatcher();
 
         address admin = vm.addr(pk);
-        bytes memory initData = abi.encodeCall(
-            MarketEngineDispatcher.initialize,
-            (IMarketEngine.InitConfig({
-                stakeToken: IERC20(address(token)),
-                priceOracle: IPriceOracle(address(oracle)),
-                admin: admin,
-                treasury: admin,
-                worker: admin,
-                defaultSettlementFeeBps: 100,
-                maxSwitchFeeBps: 500,
-                maxOutcomes: 8,
-                oracleKind: MarketTypes.OracleKind.Chainlink,
-                oracleMaxDelaySeconds: 3600,
-                oracleMaxConfidenceBps: 10_000
-            }))
-        );
+        DeployInitParams memory p = DeployInitParams({stakeToken: address(token), priceOracle: address(oracle), admin: admin});
+        IMarketEngine.InitConfig memory initConfig = _buildInitConfig(p);
+        bytes memory initData = abi.encodeCall(MarketEngineDispatcher.initialize, (initConfig));
         address proxy = UnsafeUpgrades.deployUUPSProxy(address(impl), initData);
         MarketEngineDispatcher dispatcher = MarketEngineDispatcher(payable(proxy));
         address adminModule = address(new MarketEngineAdminModule());
@@ -123,5 +116,21 @@ contract DeployLocal is Script {
         console2.log("MarketEngineDispatcher implementation", address(impl));
 
         vm.stopBroadcast();
+    }
+
+    function _buildInitConfig(DeployInitParams memory p) internal pure returns (IMarketEngine.InitConfig memory cfg) {
+        cfg = IMarketEngine.InitConfig({
+            stakeToken: IERC20(p.stakeToken),
+            priceOracle: IPriceOracle(p.priceOracle),
+            admin: p.admin,
+            treasury: p.admin,
+            worker: p.admin,
+            defaultSettlementFeeBps: 100,
+            maxSwitchFeeBps: 500,
+            maxOutcomes: 8,
+            oracleKind: MarketTypes.OracleKind.Chainlink,
+            oracleMaxDelaySeconds: 3600,
+            oracleMaxConfidenceBps: 10_000
+        });
     }
 }

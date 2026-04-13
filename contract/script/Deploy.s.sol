@@ -23,6 +23,19 @@ import {MarketTypes} from "../src/types/MarketTypes.sol";
 ///   DEFAULT_SETTLEMENT_FEE_BPS, MAX_SWITCH_FEE_BPS, MAX_OUTCOMES,
 ///   ORACLE_MAX_DELAY_SECONDS, ORACLE_MAX_CONFIDENCE_BPS
 contract Deploy is Script {
+    struct DeployInitParams {
+        address stakeToken;
+        address adapter;
+        address admin;
+        address treasury;
+        address worker;
+        uint16 defFee;
+        uint16 maxSw;
+        uint8 maxOut;
+        uint64 delay;
+        uint16 conf;
+    }
+
     function run() external {
         // Production checklist alignment:
         // - Do not embed private keys in env vars. Use Foundry keystore via `--account` and/or `--sender`.
@@ -52,35 +65,28 @@ contract Deploy is Script {
         require(delayRaw <= type(uint64).max, "ORACLE_MAX_DELAY_SECONDS overflow");
         require(confRaw <= 10_000, "ORACLE_MAX_CONFIDENCE_BPS>10000");
 
-        // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
-        uint16 defFee = uint16(defFeeRaw);
-        // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
-        uint16 maxSw = uint16(maxSwRaw);
-        // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
-        uint8 maxOut = uint8(maxOutRaw);
-        // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
-        uint64 delay = uint64(delayRaw);
-        // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
-        uint16 conf = uint16(confRaw);
-
         ChainlinkAdapter adapter = new ChainlinkAdapter(sequencerFeed);
 
-        bytes memory initData = abi.encodeCall(
-            MarketEngineDispatcher.initialize,
-            (IMarketEngine.InitConfig({
-                stakeToken: IERC20(stakeToken),
-                priceOracle: IPriceOracle(address(adapter)),
-                admin: admin,
-                treasury: treasury,
-                worker: worker,
-                defaultSettlementFeeBps: defFee,
-                maxSwitchFeeBps: maxSw,
-                maxOutcomes: maxOut,
-                oracleKind: MarketTypes.OracleKind.Chainlink,
-                oracleMaxDelaySeconds: delay,
-                oracleMaxConfidenceBps: conf
-            }))
-        );
+        DeployInitParams memory p = DeployInitParams({
+            stakeToken: stakeToken,
+            adapter: address(adapter),
+            admin: admin,
+            treasury: treasury,
+            worker: worker,
+            // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
+            defFee: uint16(defFeeRaw),
+            // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
+            maxSw: uint16(maxSwRaw),
+            // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
+            maxOut: uint8(maxOutRaw),
+            // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
+            delay: uint64(delayRaw),
+            // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
+            conf: uint16(confRaw)
+        });
+
+        IMarketEngine.InitConfig memory initConfig = _buildInitConfig(p);
+        bytes memory initData = abi.encodeCall(MarketEngineDispatcher.initialize, (initConfig));
 
         Options memory opts;
         address proxy =
@@ -165,11 +171,11 @@ contract Deploy is Script {
         // Post-deploy verification (script-level; still do independent RPC checks per checklist).
         IMarketEngine engine = IMarketEngine(proxy);
         require(engine.configInitialized(), "configInitialized=false");
-        require(address(engine.stakeToken()) == stakeToken, "stakeToken mismatch");
+        require(address(engine.stakeToken()) == p.stakeToken, "stakeToken mismatch");
         require(address(engine.priceOracle()) == address(adapter), "priceOracle mismatch");
-        require(engine.admin() == admin, "admin mismatch");
-        require(engine.treasury() == treasury, "treasury mismatch");
-        require(engine.workerAuthority() == worker, "worker mismatch");
+        require(engine.admin() == p.admin, "admin mismatch");
+        require(engine.treasury() == p.treasury, "treasury mismatch");
+        require(engine.workerAuthority() == p.worker, "worker mismatch");
 
         console2.log("ChainlinkAdapter", address(adapter));
         console2.log("MarketEngineDispatcher proxy", proxy);
@@ -179,10 +185,26 @@ contract Deploy is Script {
         console2.log("MODULE_USEROPS_CLAIMS", userOpsClaimsModule);
         console2.log("MODULE_CORE_LIFECYCLE", coreLifecycleModule);
         console2.log("MODULE_ROLLING_LIFECYCLE", rollingLifecycleModule);
-        console2.log("Admin", admin);
-        console2.log("Treasury", treasury);
-        console2.log("Worker", worker);
+        console2.log("Admin", p.admin);
+        console2.log("Treasury", p.treasury);
+        console2.log("Worker", p.worker);
 
         vm.stopBroadcast();
+    }
+
+    function _buildInitConfig(DeployInitParams memory p) internal pure returns (IMarketEngine.InitConfig memory cfg) {
+        cfg = IMarketEngine.InitConfig({
+            stakeToken: IERC20(p.stakeToken),
+            priceOracle: IPriceOracle(p.adapter),
+            admin: p.admin,
+            treasury: p.treasury,
+            worker: p.worker,
+            defaultSettlementFeeBps: p.defFee,
+            maxSwitchFeeBps: p.maxSw,
+            maxOutcomes: p.maxOut,
+            oracleKind: MarketTypes.OracleKind.Chainlink,
+            oracleMaxDelaySeconds: p.delay,
+            oracleMaxConfidenceBps: p.conf
+        });
     }
 }
