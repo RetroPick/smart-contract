@@ -33,18 +33,18 @@ abstract contract MarketEngineBase is Test {
         bytes memory initData = abi.encodeCall(
             MarketEngineDispatcher.initialize,
             (MarketEngine.InitConfig({
-                stakeToken: IERC20(address(token)),
-                priceOracle: oracle,
-                admin: admin,
-                treasury: treasury,
-                worker: worker,
-                defaultSettlementFeeBps: 100,
-                maxSwitchFeeBps: 500,
-                maxOutcomes: 8,
-                oracleKind: MarketTypes.OracleKind.Chainlink,
-                oracleMaxDelaySeconds: 3600,
-                oracleMaxConfidenceBps: 10_000
-            }))
+                    stakeToken: IERC20(address(token)),
+                    priceOracle: oracle,
+                    admin: admin,
+                    treasury: treasury,
+                    worker: worker,
+                    defaultSettlementFeeBps: 100,
+                    maxSwitchFeeBps: 500,
+                    maxOutcomes: 8,
+                    oracleKind: MarketTypes.OracleKind.Chainlink,
+                    oracleMaxDelaySeconds: 3600,
+                    oracleMaxConfidenceBps: 10_000
+                }))
         );
         address proxy = UnsafeUpgrades.deployUUPSProxy(address(impl), initData);
         MarketEngineDispatcher dispatcher = MarketEngineDispatcher(payable(proxy));
@@ -56,7 +56,9 @@ abstract contract MarketEngineBase is Test {
         address rollingLifecycleModule = address(new MarketEngineRollingLifecycleModule());
 
         vm.startPrank(admin);
-        _wireModules(dispatcher, adminModule, viewModule, userOpsClaimsModule, coreLifecycleModule, rollingLifecycleModule);
+        _wireModules(
+            dispatcher, adminModule, viewModule, userOpsClaimsModule, coreLifecycleModule, rollingLifecycleModule
+        );
         vm.stopPrank();
 
         engine = MarketEngine(proxy);
@@ -71,7 +73,11 @@ abstract contract MarketEngineBase is Test {
         return _defaultThresholdTemplate(slug);
     }
 
-    function _defaultThresholdTemplate(string memory slug) internal view returns (MarketEngine.UpsertTemplateParams memory p) {
+    function _defaultThresholdTemplate(string memory slug)
+        internal
+        view
+        returns (MarketEngine.UpsertTemplateParams memory p)
+    {
         p.slug = slug;
         p.assetSymbol = "ETH";
         p.oracleFeedId = feed;
@@ -89,9 +95,15 @@ abstract contract MarketEngineBase is Test {
         p.rollingBufferSeconds = 0;
         p.oracleMaxDelaySeconds = 0;
         p.oracleMaxConfidenceBps = 0;
+        p.templateOracleKind = MarketTypes.OracleKind.Chainlink;
+        p.oracleClass = MarketTypes.OracleClass.CHAINLINK_PRICE;
     }
 
-    function _directionManualTemplate(string memory slug) internal view returns (MarketEngine.UpsertTemplateParams memory p) {
+    function _directionManualTemplate(string memory slug)
+        internal
+        view
+        returns (MarketEngine.UpsertTemplateParams memory p)
+    {
         p.slug = slug;
         p.assetSymbol = "ETH";
         p.oracleFeedId = feed;
@@ -109,10 +121,16 @@ abstract contract MarketEngineBase is Test {
         p.rollingBufferSeconds = 0;
         p.oracleMaxDelaySeconds = 0;
         p.oracleMaxConfidenceBps = 0;
+        p.templateOracleKind = MarketTypes.OracleKind.Chainlink;
+        p.oracleClass = MarketTypes.OracleClass.CHAINLINK_PRICE;
     }
 
     /// @dev RangeClose: three buckets; bounds strictly increasing (see `_validateTemplate`).
-    function _rangeCloseTemplate(string memory slug) internal view returns (MarketEngine.UpsertTemplateParams memory p) {
+    function _rangeCloseTemplate(string memory slug)
+        internal
+        view
+        returns (MarketEngine.UpsertTemplateParams memory p)
+    {
         p.slug = slug;
         p.assetSymbol = "ETH";
         p.oracleFeedId = feed;
@@ -131,6 +149,161 @@ abstract contract MarketEngineBase is Test {
         p.rollingBufferSeconds = 0;
         p.oracleMaxDelaySeconds = 0;
         p.oracleMaxConfidenceBps = 0;
+        p.templateOracleKind = MarketTypes.OracleKind.Chainlink;
+        p.oracleClass = MarketTypes.OracleClass.CHAINLINK_PRICE;
+    }
+
+    function _anchorTemplate(string memory slug) internal view returns (MarketEngine.UpsertTemplateParams memory p) {
+        p = _defaultThresholdTemplate(slug);
+        p.marketType = MarketTypes.MarketType.Threshold;
+        p.absoluteThresholdValueE8 = 0;
+        p.anchorPriceE8 = 100e8;
+    }
+
+    function _velocityTemplate(string memory slug) internal view returns (MarketEngine.UpsertTemplateParams memory p) {
+        p = _defaultThresholdTemplate(slug);
+        p.marketType = MarketTypes.MarketType.Velocity;
+        p.thresholdRule = MarketTypes.ThresholdRule.None;
+        p.outcomeCount = 3;
+        p.rangeBoundsE8[0] = 100e8;
+        p.rangeBoundsE8[1] = 200e8;
+        p.absoluteThresholdValueE8 = 0;
+        p.velocityBoundsE4[0] = 500;
+        p.velocityBoundsE4[1] = 1500;
+    }
+
+    function _ladderTemplate(string memory slug) internal view returns (MarketEngine.UpsertTemplateParams memory p) {
+        p = _defaultThresholdTemplate(slug);
+        p.marketType = MarketTypes.MarketType.Ladder;
+        p.thresholdRule = MarketTypes.ThresholdRule.None;
+        p.outcomeCount = 3;
+        p.rangeBoundsE8[0] = 100e8;
+        p.rangeBoundsE8[1] = 200e8;
+        p.absoluteThresholdValueE8 = 0;
+        p.ladderBoundsE8[0] = 100e8;
+        p.ladderBoundsE8[1] = 200e8;
+        p.ladderPayoutWeightsBps[0] = 8_000;
+        p.ladderPayoutWeightsBps[1] = 9_000;
+        p.ladderPayoutWeightsBps[2] = 10_000;
+    }
+
+    function _convergenceTemplate(string memory slug, bytes32 feedB)
+        internal
+        view
+        returns (MarketEngine.UpsertTemplateParams memory p)
+    {
+        p = _defaultThresholdTemplate(slug);
+        p.marketType = MarketTypes.MarketType.Convergence;
+        p.thresholdRule = MarketTypes.ThresholdRule.Absolute;
+        p.oracleFeedIdB = feedB;
+        p.spreadToleranceBps = 50;
+    }
+
+    function _compositeTemplate(string memory slug, bytes32 feedB, bytes32 feedC)
+        internal
+        view
+        returns (MarketEngine.UpsertTemplateParams memory p)
+    {
+        p = _defaultThresholdTemplate(slug);
+        p.marketType = MarketTypes.MarketType.Composite;
+        p.thresholdRule = MarketTypes.ThresholdRule.Absolute;
+        p.compositeFeedCount = 3;
+        p.compositeFeedIds[0] = feed;
+        p.compositeFeedIds[1] = feedB;
+        p.compositeFeedIds[2] = feedC;
+        p.compositeConditions[0] = MarketTypes.Condition.AtOrAbove;
+        p.compositeConditions[1] = MarketTypes.Condition.AtOrAbove;
+        p.compositeConditions[2] = MarketTypes.Condition.AtOrAbove;
+        p.compositeLogic = MarketTypes.CompositeLogic.Majority;
+    }
+
+    function _corridorTemplate(string memory slug, address eventOracle)
+        internal
+        view
+        returns (MarketEngine.UpsertTemplateParams memory p)
+    {
+        p = _rangeCloseTemplate(slug);
+        p.marketType = MarketTypes.MarketType.Corridor;
+        p.templateOracleKind = MarketTypes.OracleKind.TrustedReporter;
+        p.eventOracle = eventOracle;
+        p.oracleFeedId = bytes32(0);
+        p.outcomeCount = 3;
+        p.rangeBoundsE8[0] = 99_500_000;
+        p.rangeBoundsE8[1] = 100_500_000;
+    }
+
+    function _cascadeTemplate(string memory slug, address eventOracle, bool downward)
+        internal
+        view
+        returns (MarketEngine.UpsertTemplateParams memory p)
+    {
+        p = _rangeCloseTemplate(slug);
+        p.marketType = MarketTypes.MarketType.Cascade;
+        p.templateOracleKind = MarketTypes.OracleKind.TrustedReporter;
+        p.eventOracle = eventOracle;
+        p.oracleFeedId = bytes32(0);
+        p.outcomeCount = 4;
+        p.cascadeDownward = downward;
+    }
+
+    function _volatilityBandTemplate(string memory slug)
+        internal
+        view
+        returns (MarketEngine.UpsertTemplateParams memory p)
+    {
+        p = _defaultThresholdTemplate(slug);
+        p.marketType = MarketTypes.MarketType.Threshold;
+        p.oracleClass = MarketTypes.OracleClass.CHAINLINK_RATE;
+    }
+
+    function _stakingAprTemplate(string memory slug)
+        internal
+        view
+        returns (MarketEngine.UpsertTemplateParams memory p)
+    {
+        p = _defaultThresholdTemplate(slug);
+        p.marketType = MarketTypes.MarketType.Threshold;
+        p.oracleClass = MarketTypes.OracleClass.CHAINLINK_RATE;
+    }
+
+    function _bitcoinIrcDirectionTemplate(string memory slug)
+        internal
+        view
+        returns (MarketEngine.UpsertTemplateParams memory p)
+    {
+        p = _directionManualTemplate(slug);
+        p.marketType = MarketTypes.MarketType.Direction;
+        p.oracleClass = MarketTypes.OracleClass.CHAINLINK_RATE;
+    }
+
+    function _bitcoinIrcThresholdTemplate(string memory slug)
+        internal
+        view
+        returns (MarketEngine.UpsertTemplateParams memory p)
+    {
+        p = _defaultThresholdTemplate(slug);
+        p.marketType = MarketTypes.MarketType.Threshold;
+        p.oracleClass = MarketTypes.OracleClass.CHAINLINK_RATE;
+    }
+
+    function _navThresholdTemplate(string memory slug)
+        internal
+        view
+        returns (MarketEngine.UpsertTemplateParams memory p)
+    {
+        p = _defaultThresholdTemplate(slug);
+        p.marketType = MarketTypes.MarketType.Threshold;
+        p.oracleClass = MarketTypes.OracleClass.CHAINLINK_SMARTDATA;
+    }
+
+    function _macroEventTemplate(string memory slug)
+        internal
+        view
+        returns (MarketEngine.UpsertTemplateParams memory p)
+    {
+        p = _defaultThresholdTemplate(slug);
+        p.marketType = MarketTypes.MarketType.Threshold;
+        p.oracleClass = MarketTypes.OracleClass.CHAINLINK_MACRO;
     }
 
     function _directionRollingTemplate(string memory slug, uint64 intervalSec, uint64 bufferSec)
@@ -211,18 +384,26 @@ abstract contract MarketEngineBase is Test {
         dispatcher.setSelectorModule(bytes4(keccak256("setWorkerAuthority(address)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setDepositExecutor(address,bool)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setYieldRouter(address,uint16)")), adminModule, false);
+        dispatcher.setSelectorModule(bytes4(keccak256("setRateOracle(address)")), adminModule, false);
+        dispatcher.setSelectorModule(bytes4(keccak256("setSmartDataOracle(address)")), adminModule, false);
+        dispatcher.setSelectorModule(bytes4(keccak256("setMacroOracle(address)")), adminModule, false);
+        dispatcher.setSelectorModule(bytes4(keccak256("setEquityOracle(address)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setLmRewardsEnabled(bool)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("keeperClaimLmRewards(bytes32)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("yieldEmergencyWithdraw(bytes32)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("initializeMarket(bytes32)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("withdrawFees(bytes32,uint256)")), adminModule, false);
 
-        dispatcher.setSelectorModule(bytes4(keccak256("getUserEpochs(bytes32,address,uint256,uint256)")), viewModule, false);
+        dispatcher.setSelectorModule(
+            bytes4(keccak256("getUserEpochs(bytes32,address,uint256,uint256)")), viewModule, false
+        );
         dispatcher.setSelectorModule(bytes4(keccak256("getVaultBalances(bytes32)")), viewModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("getRollingLifecycle(bytes32)")), viewModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("getEpoch(bytes32,uint64)")), viewModule, false);
 
-        dispatcher.setSelectorModule(bytes4(keccak256("depositToSide(bytes32,uint64,uint8,uint256)")), userOpsClaimsModule, false);
+        dispatcher.setSelectorModule(
+            bytes4(keccak256("depositToSide(bytes32,uint64,uint8,uint256)")), userOpsClaimsModule, false
+        );
         dispatcher.setSelectorModule(
             bytes4(keccak256("depositToSideFor(address,bytes32,uint64,uint8,uint256)")), userOpsClaimsModule, false
         );
@@ -232,20 +413,14 @@ abstract contract MarketEngineBase is Test {
         dispatcher.setSelectorModule(bytes4(keccak256("claim(bytes32,uint64)")), userOpsClaimsModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("claimMany(bytes32,uint64[])")), userOpsClaimsModule, false);
 
-        dispatcher.setSelectorModule(
-            bytes4(
-                keccak256(
-                    "upsertTemplate((string,string,bytes32,uint8,uint8,uint8,bool,uint8,int256,int256[7],uint16,uint16,bool,uint8,uint64,uint64,uint64,uint16))"
-                )
-            ),
-            coreLifecycleModule,
-            false
-        );
+        dispatcher.setSelectorModule(MarketEngine.upsertTemplate.selector, coreLifecycleModule, false);
         dispatcher.setSelectorModule(
             bytes4(keccak256("openEpoch(bytes32,uint64,uint64,uint64,uint64)")), coreLifecycleModule, false
         );
         dispatcher.setSelectorModule(
-            bytes4(keccak256("openEpochsBatch(bytes32[],uint64[],uint64[],uint64[],uint64[])")), coreLifecycleModule, false
+            bytes4(keccak256("openEpochsBatch(bytes32[],uint64[],uint64[],uint64[],uint64[])")),
+            coreLifecycleModule,
+            false
         );
         dispatcher.setSelectorModule(bytes4(keccak256("lockEpoch(bytes32,uint64)")), coreLifecycleModule, false);
         dispatcher.setSelectorModule(

@@ -84,7 +84,8 @@ contract YieldRouterAaveV3 is IYieldRouter, IYieldRouterV2, Ownable2Step {
         if (principalAmount > principal) revert OverWithdraw();
 
         uint256 totalShares = sharesByTemplate[templateId];
-        uint256 sharesToRedeem = principalAmount == principal ? totalShares : (totalShares * principalAmount) / principal;
+        uint256 sharesToRedeem =
+            principalAmount == principal ? totalShares : (totalShares * principalAmount) / principal;
 
         grossAmount = AAVE_POOL.withdraw(address(STAKE_TOKEN), sharesToRedeem, ENGINE);
 
@@ -98,7 +99,12 @@ contract YieldRouterAaveV3 is IYieldRouter, IYieldRouterV2, Ownable2Step {
         _deposit(templateId, amount);
     }
 
-    function withdraw(bytes32 templateId, uint256 principalAmount) external override onlyEngine returns (uint256 grossAmount) {
+    function withdraw(bytes32 templateId, uint256 principalAmount)
+        external
+        override
+        onlyEngine
+        returns (uint256 grossAmount)
+    {
         return _withdraw(templateId, principalAmount);
     }
 
@@ -123,7 +129,12 @@ contract YieldRouterAaveV3 is IYieldRouter, IYieldRouterV2, Ownable2Step {
 
     // --- IYieldRouterV2 (compat layer; legacy rebasing share accounting) ---
 
-    function depositScaled(bytes32 templateId, uint256 amount) external override onlyEngine returns (uint256 attributionUnits) {
+    function depositScaled(bytes32 templateId, uint256 amount)
+        external
+        override
+        onlyEngine
+        returns (uint256 attributionUnits)
+    {
         uint256 sharesBefore = sharesByTemplate[templateId];
         _deposit(templateId, amount);
         return sharesByTemplate[templateId] - sharesBefore;

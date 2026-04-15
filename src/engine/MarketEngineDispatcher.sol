@@ -25,7 +25,9 @@ contract MarketEngineDispatcher is Initializable, ReentrancyGuardTransient, UUPS
 
     function initialize(IMarketEngine.InitConfig calldata config) external initializer onlyProxy {
         if (configInitialized) revert Unauthorized();
-        if (address(config.stakeToken) == address(0) || address(config.priceOracle) == address(0)) revert Unauthorized();
+        if (address(config.stakeToken) == address(0) || address(config.priceOracle) == address(0)) {
+            revert Unauthorized();
+        }
         if (config.admin == address(0) || config.treasury == address(0) || config.worker == address(0)) {
             revert Unauthorized();
         }

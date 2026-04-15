@@ -53,7 +53,7 @@ Use `EpochGasTest:test_gas_*` for Manual paths and `MarketEngineRollingTest:test
 
 **Ops defaults for lower cost:** recurring **Direction** → prefer **Rolling**; multi-template keepers → **batch** APIs; set per-feed **`oracleMaxDelaySeconds`** (and global defaults) to the Chainlink feed **heartbeat + buffer** so keeper txs do not revert on stale prices—see [Cost-conscious operations defaults](./DEPLOYMENT_AND_EPOCHS.md#cost-conscious-operations-defaults-recommended).
 
-**Compiler profiles**: [`foundry.toml`](foundry.toml) defines **`default`** (200 runs), **`production`** (1M runs — often **better runtime gas**, but `MarketEngine` typically **fails EIP-170** at that setting), and **`deploybudget`** (`optimizer_runs = 1` — smaller bytecode, higher runtime gas). **Deploy** `MarketEngine` **implementation** with **`default`** or **`deploybudget`**, not `production`. CI runs [`script/check-contract-sizes.sh`](script/check-contract-sizes.sh) (set **`STRICT_EIP170=1`** for a hard EIP-170 gate before mainnet). Production deploy uses a **UUPS** proxy via [`script/Deploy.s.sol`](script/Deploy.s.sol) (`--ffi` recommended).
+**Compiler profiles**: [`foundry.toml`](foundry.toml) defines **`default`** (200 runs), **`production`** (1M runs — often **better runtime gas**, but `MarketEngine` typically **fails EIP-170** at that setting), and **`deploybudget`** (`optimizer_runs = 1` — smaller bytecode, higher runtime gas). **Deploy** `MarketEngine` **implementation** with **`default`** or **`deploybudget`**, not `production`. CI runs [`script/check-contract-sizes.sh`](script/check-contract-sizes.sh) (set **`STRICT_EIP170=1`** for a hard EIP-170 gate before mainnet). Production deploy uses a **UUPS** proxy via [`script/production/DeployProduction.s.sol`](script/production/DeployProduction.s.sol) (`--ffi` required).
 
 ## Deploy (chain-agnostic)
 
@@ -63,7 +63,7 @@ Set:
 
 | Variable | Meaning |
 |----------|---------|
-| `PRIVATE_KEY` | Broadcast wallet (deploys adapter + implementation + proxy; no persistent deployer role after `initialize`) |
+| `DEPLOY_ACCOUNT` | Foundry keystore account name used with `--account` for broadcast |
 | `STAKE_TOKEN` | ERC20 used as collateral |
 | `SEQUENCER_FEED` | Chainlink **L2 sequencer uptime** proxy on the target rollup; use `0x0000000000000000000000000000000000000000` on **L1** to disable the check |
 | `ADMIN` | Admin pubkey |
@@ -78,7 +78,7 @@ Set:
 **Dependency:** [`lib/chainlink-brownie-contracts`](./lib/chainlink-brownie-contracts) (Chainlink `AggregatorV3Interface`; pin tag `1.3.0` or newer).
 
 ```bash
-forge script script/Deploy.s.sol:Deploy --rpc-url "$RPC_URL" --ffi --broadcast
+forge script script/production/DeployProduction.s.sol:DeployProduction --rpc-url "$RPC_URL" --ffi --account "$DEPLOY_ACCOUNT" --broadcast
 ```
 
 ### Local / mock oracle

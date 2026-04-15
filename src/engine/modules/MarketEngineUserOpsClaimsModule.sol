@@ -50,8 +50,10 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
         MarketTypes.Template storage t = _templates[templateId];
         MarketTypes.Ledger storage ledger = _ledgers[templateId];
         if (!ledger.initialized) revert InvalidTemplate();
-        if (t.executionMode == MarketTypes.ExecutionMode.Rolling && ledger.rollingPhase == MarketTypes.RollingPhase.Halted)
-        {
+        if (
+            t.executionMode == MarketTypes.ExecutionMode.Rolling
+                && ledger.rollingPhase == MarketTypes.RollingPhase.Halted
+        ) {
             revert RollingHaltedUserOps();
         }
         _requireActiveEpoch(ledger, epochId);
@@ -125,8 +127,10 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
         MarketTypes.Template storage t = _templates[templateId];
         MarketTypes.Ledger storage ledger = _ledgers[templateId];
         if (!ledger.initialized) revert InvalidTemplate();
-        if (t.executionMode == MarketTypes.ExecutionMode.Rolling && ledger.rollingPhase == MarketTypes.RollingPhase.Halted)
-        {
+        if (
+            t.executionMode == MarketTypes.ExecutionMode.Rolling
+                && ledger.rollingPhase == MarketTypes.RollingPhase.Halted
+        ) {
             revert RollingHaltedUserOps();
         }
         _requireActiveEpoch(ledger, epochId);
@@ -168,8 +172,8 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
             if (routeAmount > 0) {
                 stakeToken.forceApprove(address(r), routeAmount);
                 // slither-disable-next-line unused-return -- `depositScaled` return (attribution units) intentionally unused; failures are isolated in `catch`.
-                try r.depositScaled(templateId, routeAmount) {
-                } catch {
+                try r.depositScaled(templateId, routeAmount) {}
+                catch {
                     emit YieldRouterDepositFailed(templateId, routeAmount);
                 }
             }

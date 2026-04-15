@@ -12,11 +12,17 @@ import {YieldRouterAaveV3} from "../src/yield/YieldRouterAaveV3.sol";
 ///   - A_TOKEN (aToken for STAKE_TOKEN on target chain)
 ///   - ENGINE_PROXY (MarketEngine proxy address)
 contract DeployYieldRouterAaveV3 is Script {
+    event YieldRouterDeployed(address indexed router);
+
     function run() external {
-        address stakeToken = vm.envAddress("STAKE_TOKEN");
-        address aavePool = vm.envAddress("AAVE_POOL");
-        address aToken = vm.envAddress("A_TOKEN");
-        address engineProxy = vm.envAddress("ENGINE_PROXY");
+        uint256 expectedChainId = vm.envUint("EXPECTED_CHAIN_ID");
+        require(expectedChainId != 0, "EXPECTED_CHAIN_ID=0");
+        require(block.chainid == expectedChainId, "wrong chain");
+
+        address stakeToken = vm.envOr("AAVE_STAKE_TOKEN", vm.envOr("STAKE_TOKEN", address(0)));
+        address aavePool = vm.envOr("AAVE_POOL_ADDRESS", vm.envOr("AAVE_POOL", address(0)));
+        address aToken = vm.envOr("AAVE_A_TOKEN", vm.envOr("A_TOKEN", address(0)));
+        address engineProxy = vm.envOr("AAVE_ENGINE_PROXY", vm.envOr("ENGINE_PROXY", address(0)));
 
         require(stakeToken != address(0), "STAKE_TOKEN=0");
         require(aavePool != address(0), "AAVE_POOL=0");
@@ -32,6 +38,7 @@ contract DeployYieldRouterAaveV3 is Script {
         console2.log("aavePool", aavePool);
         console2.log("aToken", aToken);
         console2.log("engineProxy", engineProxy);
+        emit YieldRouterDeployed(address(router));
     }
 }
 

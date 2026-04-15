@@ -43,12 +43,7 @@ contract MockAggregatorV3 is AggregatorV3Interface {
         return (_roundId, _answer, _updatedAt, _updatedAt, _answeredInRound);
     }
 
-    function getRoundData(uint80 rid)
-        external
-        view
-        override
-        returns (uint80, int256, uint256, uint256, uint80)
-    {
+    function getRoundData(uint80 rid) external view override returns (uint80, int256, uint256, uint256, uint80) {
         return (rid, _answer, _updatedAt, _updatedAt, rid);
     }
 

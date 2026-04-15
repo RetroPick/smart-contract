@@ -15,11 +15,17 @@ import {YieldRouterV2} from "../src/yield/YieldRouterV2.sol";
 ///   - REWARDS_CONTROLLER
 ///   - STATA_TOKEN
 contract DeployYieldRouterV2 is Script {
+    event YieldRouterDeployed(address indexed router);
+
     function run() external {
+        uint256 expectedChainId = vm.envUint("EXPECTED_CHAIN_ID");
+        require(expectedChainId != 0, "EXPECTED_CHAIN_ID=0");
+        require(block.chainid == expectedChainId, "wrong chain");
+
         address stakeToken = vm.envAddress("STAKE_TOKEN");
         address aavePool = vm.envAddress("AAVE_POOL");
         address aToken = vm.envAddress("A_TOKEN");
-        address engineProxy = vm.envAddress("ENGINE_PROXY");
+        address engineProxy = vm.envOr("V2_ENGINE_PROXY", vm.envOr("ENGINE_PROXY", address(0)));
         address rewards = vm.envOr("REWARDS_CONTROLLER", address(0));
         address stata = vm.envOr("STATA_TOKEN", address(0));
 
@@ -39,5 +45,6 @@ contract DeployYieldRouterV2 is Script {
         console2.log("rewardsController", rewards);
         console2.log("stataToken", stata);
         console2.log("engineProxy", engineProxy);
+        emit YieldRouterDeployed(address(router));
     }
 }

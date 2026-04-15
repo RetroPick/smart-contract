@@ -15,9 +15,13 @@ import {MockPriceOracle} from "../src/test/MockPriceOracle.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IPriceOracle} from "../src/interfaces/IPriceOracle.sol";
 import {MarketTypes} from "../src/types/MarketTypes.sol";
+import {TrustedReporterAdapter} from "../src/oracle/TrustedReporterAdapter.sol";
+import {ScriptSelectorMatrix} from "./ScriptSelectorMatrix.sol";
 
 /// @dev Local / CI: mock token + oracle + UUPS `MarketEngine` proxy with `initialize` (no `--ffi`).
 contract DeployLocal is Script {
+    event DeploymentCompleted(address indexed proxy, address indexed implementation);
+
     struct DeployInitParams {
         address stakeToken;
         address priceOracle;
@@ -34,7 +38,8 @@ contract DeployLocal is Script {
         MarketEngineDispatcher impl = new MarketEngineDispatcher();
 
         address admin = vm.addr(pk);
-        DeployInitParams memory p = DeployInitParams({stakeToken: address(token), priceOracle: address(oracle), admin: admin});
+        DeployInitParams memory p =
+            DeployInitParams({stakeToken: address(token), priceOracle: address(oracle), admin: admin});
         IMarketEngine.InitConfig memory initConfig = _buildInitConfig(p);
         bytes memory initData = abi.encodeCall(MarketEngineDispatcher.initialize, (initConfig));
         address proxy = UnsafeUpgrades.deployUUPSProxy(address(impl), initData);
@@ -44,76 +49,25 @@ contract DeployLocal is Script {
         address userOpsClaimsModule = address(new MarketEngineUserOpsClaimsModule());
         address coreLifecycleModule = address(new MarketEngineCoreLifecycleModule());
         address rollingLifecycleModule = address(new MarketEngineRollingLifecycleModule());
+        ScriptSelectorMatrix.wireAll(
+            dispatcher,
+            ScriptSelectorMatrix.Modules({
+                admin: adminModule,
+                viewModule: viewModule,
+                userOpsClaims: userOpsClaimsModule,
+                coreLifecycle: coreLifecycleModule,
+                rollingLifecycle: rollingLifecycleModule
+            })
+        );
 
-        dispatcher.setSelectorModule(bytes4(keccak256("pauseProgram(bool)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setTreasury(address)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setWorkerAuthority(address)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setDepositExecutor(address,bool)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setYieldRouter(address,uint16)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setLmRewardsEnabled(bool)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("keeperClaimLmRewards(bytes32)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("yieldEmergencyWithdraw(bytes32)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("initializeMarket(bytes32)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("withdrawFees(bytes32,uint256)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("getUserEpochs(bytes32,address,uint256,uint256)")), viewModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("getVaultBalances(bytes32)")), viewModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("getRollingLifecycle(bytes32)")), viewModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("getEpoch(bytes32,uint64)")), viewModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("depositToSide(bytes32,uint64,uint8,uint256)")), userOpsClaimsModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("depositToSideFor(address,bytes32,uint64,uint8,uint256)")), userOpsClaimsModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("switchSide(bytes32,uint64,uint8,uint8,uint256)")), userOpsClaimsModule, false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("claim(bytes32,uint64)")), userOpsClaimsModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("claimMany(bytes32,uint64[])")), userOpsClaimsModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(
-                keccak256(
-                    "upsertTemplate((string,string,bytes32,uint8,uint8,uint8,bool,uint8,int256,int256[7],uint16,uint16,bool,uint8,uint64,uint64,uint64,uint16))"
-                )
-            ),
-            coreLifecycleModule,
-            false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("openEpoch(bytes32,uint64,uint64,uint64,uint64)")), coreLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("openEpochsBatch(bytes32[],uint64[],uint64[],uint64[],uint64[])")),
-            coreLifecycleModule,
-            false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("lockEpoch(bytes32,uint64)")), coreLifecycleModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("lockEpochsBatch(bytes32[],uint64[])")), coreLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("resolveEpoch(bytes32,uint64)")), coreLifecycleModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("resolveEpochsBatch(bytes32[],uint64[])")), coreLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("cancelEpoch(bytes32,uint64,uint8,bool)")), coreLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("genesisStartRolling(bytes32)")), rollingLifecycleModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("genesisLockRolling(bytes32)")), rollingLifecycleModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("executeRollingRound(bytes32)")), rollingLifecycleModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("executeRollingRoundBatch(bytes32[])")), rollingLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("haltRollingMarket(bytes32)")), rollingLifecycleModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("cancelRollingEpochWhileHalted(bytes32,uint64,uint8,bool)")), rollingLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("resetRollingLifecycle(bytes32,uint64)")), rollingLifecycleModule, false
-        );
+        TrustedReporterAdapter troAdapter = new TrustedReporterAdapter(admin, admin, 3600);
+        console2.log("TrustedReporterAdapter", address(troAdapter));
 
         console2.log("MockERC20", address(token));
         console2.log("MockPriceOracle", address(oracle));
         console2.log("MarketEngineDispatcher proxy", proxy);
         console2.log("MarketEngineDispatcher implementation", address(impl));
+        emit DeploymentCompleted(proxy, address(impl));
 
         vm.stopBroadcast();
     }

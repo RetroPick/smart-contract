@@ -1516,7 +1516,7 @@ forge test --match-path "test/invariant/YieldRouterV2Invariant.t.sol" \
 | `src/MarketEngine.sol` | Storage: `IYieldRouter` → `IYieldRouterV2`, add `lmRewardsEnabled` bool. `_depositToSide()`: use `depositScaled()`. `_finishResolveEpoch()`: use `withdrawScaled()` with ray-exact yield accounting. New `keeperClaimLMRewards()`. New events. |
 | `src/types/MarketTypes.sol` | Epoch struct: append `uint128 yieldGross`, `uint128 yieldNet`, `uint128 scaledSnapshot`. |
 | `src/math/MarketMath.sol` | `computeEpochClaimLiabilityStorage()`: already updated in V1 for `netYield` param — no further change needed. |
-| `script/Deploy.s.sol` | Deploy `YieldRouterV2` after adapter. Add `IRewardsController` address as param. |
+| `script/production/DeployProduction.s.sol` | Deploy `YieldRouterV2` after adapter. Add `IRewardsController` address as param. |
 | `script/UpgradeMarketEngine.s.sol` | Upgrade to V2 impl + migrate router from V1 to V2. |
 
 ### Removed/replaced files

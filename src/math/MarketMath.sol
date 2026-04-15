@@ -82,6 +82,24 @@ library MarketMath {
         claimLiabilityTotal = winningPool + distributableLosingPool;
     }
 
+    /// @notice Ladder payout variant where only a weighted portion of losing pool is distributed.
+    /// @dev Remaining losing-pool amount stays as protocol settlement fee.
+    function computeLadderLiabilityComponents(
+        uint256 totalPool,
+        uint256 winningPool,
+        uint16 feeBps,
+        bool feeOnLosingPool,
+        uint16 winnerWeightBps
+    ) internal pure returns (uint256 claimLiabilityTotal, uint256 settlementFee, uint256 distributableLosingPool) {
+        (uint256 baseClaimLiability, uint256 baseSettlementFee, uint256 baseDistributableLosingPool) =
+            computeClaimLiabilityComponents(totalPool, winningPool, feeBps, feeOnLosingPool);
+        if (winningPool == 0) return (baseClaimLiability, baseSettlementFee, baseDistributableLosingPool);
+        if (winnerWeightBps >= BPS_DENOMINATOR) return (baseClaimLiability, baseSettlementFee, baseDistributableLosingPool);
+        distributableLosingPool = (baseDistributableLosingPool * uint256(winnerWeightBps)) / BPS_DENOMINATOR;
+        settlementFee = baseSettlementFee + (baseDistributableLosingPool - distributableLosingPool);
+        claimLiabilityTotal = winningPool + distributableLosingPool;
+    }
+
     /// @notice Compute claim liability totals for a resolved epoch (memory variant).
     function computeEpochClaimLiability(MarketTypes.Epoch memory epoch, uint16 feeBps, bool feeOnLosingPool)
         internal
@@ -90,6 +108,51 @@ library MarketMath {
     {
         uint256 wp = epoch.winningPoolTotal();
         return computeClaimLiabilityComponents(epoch.totalPool, wp, feeBps, feeOnLosingPool);
+    }
+
+    /// @dev Distributable losing pool for pro-rata claims; ladder uses tier weight (same `totalPool` basis as `computeClaimPayout*`).
+    function _distributableLosingPoolForClaims(
+        MarketTypes.Epoch memory epoch,
+        uint256 winningPool,
+        uint16 settlementFeeBps,
+        bool feeOnLosingPool
+    ) private pure returns (uint256) {
+        if (epoch.marketType == MarketTypes.MarketType.Ladder) {
+            uint8 winnerIdx = _firstWinningOutcomeIndex(epoch.winningOutcomeMask, epoch.outcomeCount);
+            uint16 w = epoch.ladderPayoutWeightsBps[winnerIdx];
+            (,, uint256 distLadder) =
+                computeLadderLiabilityComponents(epoch.totalPool, winningPool, settlementFeeBps, feeOnLosingPool, w);
+            return distLadder;
+        }
+        (,, uint256 distStd) =
+            computeClaimLiabilityComponents(epoch.totalPool, winningPool, settlementFeeBps, feeOnLosingPool);
+        return distStd;
+    }
+
+    function _distributableLosingPoolForClaimsStorage(MarketTypes.Epoch storage epoch, uint256 winningPool)
+        private
+        view
+        returns (uint256)
+    {
+        if (epoch.marketType == MarketTypes.MarketType.Ladder) {
+            uint8 winnerIdx = _firstWinningOutcomeIndex(epoch.winningOutcomeMask, epoch.outcomeCount);
+            uint16 w = epoch.ladderPayoutWeightsBps[winnerIdx];
+            (,, uint256 distLadder) = computeLadderLiabilityComponents(
+                epoch.totalPool, winningPool, epoch.settlementFeeBps, epoch.feeOnLosingPool, w
+            );
+            return distLadder;
+        }
+        (,, uint256 distStd) = computeClaimLiabilityComponents(
+            epoch.totalPool, winningPool, epoch.settlementFeeBps, epoch.feeOnLosingPool
+        );
+        return distStd;
+    }
+
+    function _firstWinningOutcomeIndex(uint256 winningMask, uint8 outcomeCount) private pure returns (uint8) {
+        for (uint8 i = 0; i < outcomeCount; i++) {
+            if (((winningMask >> i) & 1) == 1) return i;
+        }
+        revert NoWinningOutcome();
     }
 
     /// @notice Compute claim liability totals for a resolved epoch (storage variant, avoids memory copy).
@@ -130,8 +193,7 @@ library MarketMath {
         uint256 userWinning = totalWinningStake(epoch.winningOutcomeMask, epoch.outcomeCount, stakes);
         if (userWinning == 0) return 0;
         uint256 winningPool = epoch.winningPoolTotal();
-        (,, uint256 distributableLosing) =
-            computeClaimLiabilityComponents(epoch.totalPool, winningPool, settlementFeeBps, feeOnLosingPool);
+        uint256 distributableLosing = _distributableLosingPoolForClaims(epoch, winningPool, settlementFeeBps, feeOnLosingPool);
         uint256 proRata = (userWinning * distributableLosing) / winningPool;
         return userWinning + proRata;
     }
@@ -146,8 +208,9 @@ library MarketMath {
         userWinningStake_ = totalWinningStake(epoch.winningOutcomeMask, epoch.outcomeCount, stakes);
         if (userWinningStake_ == 0) return (0, 0);
 
-        uint256 entitlement =
-            computeTotalUserEntitlementResolved(epoch, stakes, epoch.settlementFeeBps, epoch.feeOnLosingPool);
+        uint256 entitlement = computeTotalUserEntitlementResolved(
+            epoch, stakes, epoch.settlementFeeBps, epoch.feeOnLosingPool
+        );
 
         if (epoch.remainingWinningStake == userWinningStake_) {
             payout = claimsReserveTotal;
@@ -175,8 +238,7 @@ library MarketMath {
                 winningPool += epoch.outcomePools[i];
             }
         }
-        (,, uint256 distributableLosing) =
-            computeClaimLiabilityComponents(epoch.totalPool, winningPool, epoch.settlementFeeBps, epoch.feeOnLosingPool);
+        uint256 distributableLosing = _distributableLosingPoolForClaimsStorage(epoch, winningPool);
         uint256 entitlement = userWinningStake_ + (userWinningStake_ * distributableLosing) / winningPool;
 
         if (epoch.remainingWinningStake == userWinningStake_) {

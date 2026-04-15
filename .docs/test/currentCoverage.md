@@ -3,16 +3,18 @@ Latest `forge coverage` (production contracts only: `src/`, excluding `src/test/
 Baseline (before expansion): `78.44%` lines, `72.21%` statements, `33.49%` branches, `72.55%` funcs
 
 Current aggregate:
-- Lines: `86.65%` (`1279/1476`)
-- Statements: `80.08%` (`1475/1842`)
-- Branches: `44.23%` (`180/407`)
-- Functions: `86.49%` (`160/185`)
+- Lines: `87.33%` (`1289/1476`)
+- Statements: `80.73%` (`1487/1842`)
+- Branches: `45.95%` (`187/407`)
+- Functions: `87.03%` (`161/185`)
 
 | File | % Lines | % Statements | % Branches | % Funcs |
 |---|---:|---:|---:|---:|
 | `src/adapters/ChainlinkAdapter.sol` | 98.21% (55/56) | 91.89% (68/74) | 64.71% (11/17) | 100.00% (7/7) |
+| `src/engine/MarketEngineDispatcher.sol` | 88.00% (44/50) | 89.39% (59/66) | 54.55% (6/11) | 81.82% (9/11) |
+| `src/engine/MarketEngineState.sol` | 83.33% (5/6) | 100.00% (6/6) | 100.00% (1/1) | 66.67% (2/3) |
 | `src/engine/modules/MarketEngineAdminModule.sol` | 88.73% (63/71) | 82.42% (75/91) | 64.00% (16/25) | 100.00% (10/10) |
-| `src/engine/modules/MarketEngineCoreLifecycleModule.sol` | 81.56% (283/347) | 73.53% (325/442) | 39.29% (44/112) | 100.00% (28/28) |
+| `src/engine/modules/MarketEngineCoreLifecycleModule.sol` | 83.86% (291/347) | 75.34% (333/442) | 42.86% (48/112) | 100.00% (28/28) |
 | `src/engine/modules/MarketEngineRollingLifecycleModule.sol` | 90.20% (368/408) | 81.46% (391/480) | 40.87% (47/115) | 96.97% (32/33) |
 | `src/engine/modules/MarketEngineUserOpsClaimsModule.sol` | 91.22% (135/148) | 79.47% (151/190) | 41.67% (20/48) | 100.00% (11/11) |
 | `src/libraries/YieldAccounting.sol` | 85.00% (17/20) | 78.57% (22/28) | 50.00% (2/4) | 83.33% (5/6) |

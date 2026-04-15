@@ -27,6 +27,20 @@ interface IMarketEngine {
         uint64 rollingBufferSeconds;
         uint64 oracleMaxDelaySeconds;
         uint16 oracleMaxConfidenceBps;
+        MarketTypes.OracleKind templateOracleKind;
+        MarketTypes.OracleClass oracleClass;
+        address eventOracle;
+        bool cascadeDownward;
+        int256 anchorPriceE8;
+        uint32[7] velocityBoundsE4;
+        int256[7] ladderBoundsE8;
+        uint16[8] ladderPayoutWeightsBps;
+        bytes32 oracleFeedIdB;
+        uint16 spreadToleranceBps;
+        bytes32[4] compositeFeedIds;
+        MarketTypes.Condition[4] compositeConditions;
+        uint8 compositeFeedCount;
+        MarketTypes.CompositeLogic compositeLogic;
     }
 
     event ConfigInitialized(address admin, address treasury, address workerAuthority);
@@ -39,13 +53,11 @@ interface IMarketEngine {
         uint16 oracleMaxConfidenceBps
     );
     event MarketInitialized(bytes32 indexed templateId);
-    event EpochOpened(bytes32 indexed templateId, uint64 indexed epochId, uint64 openAt, uint64 lockAt, uint64 resolveAt);
+    event EpochOpened(
+        bytes32 indexed templateId, uint64 indexed epochId, uint64 openAt, uint64 lockAt, uint64 resolveAt
+    );
     event PositionDeposited(
-        bytes32 indexed templateId,
-        uint64 indexed epochId,
-        address indexed user,
-        uint8 outcome,
-        uint256 amount
+        bytes32 indexed templateId, uint64 indexed epochId, address indexed user, uint8 outcome, uint256 amount
     );
     event UserEpochIndexed(bytes32 indexed templateId, uint64 indexed epochId, address indexed user);
     event SideSwitched(
@@ -59,10 +71,7 @@ interface IMarketEngine {
         uint256 netAmount
     );
     event EpochLocked(
-        bytes32 indexed templateId,
-        uint64 indexed epochId,
-        int256 checkpointAValueE8,
-        uint64 publishTime
+        bytes32 indexed templateId, uint64 indexed epochId, int256 checkpointAValueE8, uint64 publishTime
     );
     event EpochResolved(
         bytes32 indexed templateId,
@@ -97,6 +106,10 @@ interface IMarketEngine {
     function initializeMarket(bytes32 templateId) external;
     function pauseProgram(bool paused) external;
     function setYieldRouter(address router, uint16 feeBps) external;
+    function setRateOracle(address oracle) external;
+    function setSmartDataOracle(address oracle) external;
+    function setMacroOracle(address oracle) external;
+    function setEquityOracle(address oracle) external;
     function setLmRewardsEnabled(bool enabled) external;
     function keeperClaimLmRewards(bytes32 templateId) external;
     function setDepositExecutor(address account, bool allowed) external;
@@ -125,12 +138,21 @@ interface IMarketEngine {
     function executeRollingRoundBatch(bytes32[] calldata templateIds) external;
     function haltRollingMarket(bytes32 templateId) external;
     function resetRollingLifecycle(bytes32 templateId, uint64 nextRollingEpochId) external;
-    function cancelRollingEpochWhileHalted(bytes32 templateId, uint64 epochId, MarketTypes.CancelReason reason, bool voided)
-        external;
+    function cancelRollingEpochWhileHalted(
+        bytes32 templateId,
+        uint64 epochId,
+        MarketTypes.CancelReason reason,
+        bool voided
+    ) external;
 
     function depositToSide(bytes32 templateId, uint64 epochId, uint8 outcomeIndex, uint256 amount) external;
-    function depositToSideFor(address beneficiary, bytes32 templateId, uint64 epochId, uint8 outcomeIndex, uint256 amount)
-        external;
+    function depositToSideFor(
+        address beneficiary,
+        bytes32 templateId,
+        uint64 epochId,
+        uint8 outcomeIndex,
+        uint256 amount
+    ) external;
     function switchSide(bytes32 templateId, uint64 epochId, uint8 fromOutcome, uint8 toOutcome, uint256 grossAmount)
         external;
     function claim(bytes32 templateId, uint64 epochId) external;
@@ -160,6 +182,10 @@ interface IMarketEngine {
     function configInitialized() external view returns (bool);
     function stakeToken() external view returns (IERC20);
     function priceOracle() external view returns (IPriceOracle);
+    function rateOracle() external view returns (IPriceOracle);
+    function smartDataOracle() external view returns (IPriceOracle);
+    function macroOracle() external view returns (IPriceOracle);
+    function equityOracle() external view returns (IPriceOracle);
     function admin() external view returns (address);
     function treasury() external view returns (address);
     function workerAuthority() external view returns (address);

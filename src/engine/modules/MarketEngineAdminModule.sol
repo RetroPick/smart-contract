@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {MarketEngineState} from "../MarketEngineState.sol";
 import {IYieldRouterV2} from "../../interfaces/IYieldRouterV2.sol";
+import {IPriceOracle} from "../../interfaces/IPriceOracle.sol";
 import {MarketTypes} from "../../types/MarketTypes.sol";
 import {MarketMath} from "../../math/MarketMath.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -12,6 +13,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 /// @dev Runs via delegatecall from `MarketEngineDispatcher`.
 contract MarketEngineAdminModule is MarketEngineState {
     using SafeERC20 for IERC20;
+
     function pauseProgram(bool paused) external {
         if (msg.sender != admin) revert Unauthorized();
         globalPaused = paused;
@@ -49,6 +51,38 @@ contract MarketEngineAdminModule is MarketEngineState {
             lmRewardsEnabled = false;
         }
         emit YieldRouterSet(old, router, yieldFeeBps);
+    }
+
+    function setRateOracle(address oracle) external {
+        if (msg.sender != admin) revert Unauthorized();
+        if (oracle == address(0)) revert InvalidOracleFeed();
+        address old = address(rateOracle);
+        rateOracle = IPriceOracle(oracle);
+        emit RateOracleSet(old, oracle);
+    }
+
+    function setSmartDataOracle(address oracle) external {
+        if (msg.sender != admin) revert Unauthorized();
+        if (oracle == address(0)) revert InvalidOracleFeed();
+        address old = address(smartDataOracle);
+        smartDataOracle = IPriceOracle(oracle);
+        emit SmartDataOracleSet(old, oracle);
+    }
+
+    function setMacroOracle(address oracle) external {
+        if (msg.sender != admin) revert Unauthorized();
+        if (oracle == address(0)) revert InvalidOracleFeed();
+        address old = address(macroOracle);
+        macroOracle = IPriceOracle(oracle);
+        emit MacroOracleSet(old, oracle);
+    }
+
+    function setEquityOracle(address oracle) external {
+        if (msg.sender != admin) revert Unauthorized();
+        if (oracle == address(0)) revert InvalidOracleFeed();
+        address old = address(equityOracle);
+        equityOracle = IPriceOracle(oracle);
+        emit EquityOracleSet(old, oracle);
     }
 
     function setLmRewardsEnabled(bool enabled) external {

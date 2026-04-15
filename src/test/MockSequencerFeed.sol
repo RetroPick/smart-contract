@@ -36,12 +36,7 @@ contract MockSequencerFeed is AggregatorV3Interface {
         return (1, _answer, _startedAt, _startedAt, 1);
     }
 
-    function getRoundData(uint80)
-        external
-        view
-        override
-        returns (uint80, int256, uint256, uint256, uint80)
-    {
+    function getRoundData(uint80) external view override returns (uint80, int256, uint256, uint256, uint80) {
         return (1, _answer, _startedAt, _startedAt, 1);
     }
 

@@ -66,9 +66,8 @@ contract MockYieldRouterReentrant is IYieldRouterV2 {
     function depositScaled(bytes32 templateId, uint256) external override onlyEngine returns (uint256) {
         if (reenterOnDepositScaled) {
             reenterOnDepositScaled = false;
-            IMarketEngine(ENGINE).depositToSideFor(
-                reenterBeneficiary, templateId, reenterEpochId, reenterOutcome, reenterAmount
-            );
+            IMarketEngine(ENGINE)
+                .depositToSideFor(reenterBeneficiary, templateId, reenterEpochId, reenterOutcome, reenterAmount);
         }
         return 0;
     }
@@ -76,9 +75,8 @@ contract MockYieldRouterReentrant is IYieldRouterV2 {
     function withdrawScaled(bytes32 templateId, uint256) external override onlyEngine returns (uint256) {
         if (reenterOnWithdrawScaled) {
             reenterOnWithdrawScaled = false;
-            IMarketEngine(ENGINE).depositToSideFor(
-                reenterBeneficiary, templateId, reenterEpochId, reenterOutcome, reenterAmount
-            );
+            IMarketEngine(ENGINE)
+                .depositToSideFor(reenterBeneficiary, templateId, reenterEpochId, reenterOutcome, reenterAmount);
         }
         return 0;
     }

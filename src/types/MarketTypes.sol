@@ -36,7 +36,27 @@ library MarketTypes {
     enum MarketType {
         Direction,
         Threshold,
-        RangeClose
+        RangeClose,
+        Velocity,
+        Ladder,
+        Convergence,
+        Composite,
+        Corridor,
+        Cascade
+    }
+
+    enum OracleClass {
+        CHAINLINK_PRICE,
+        CHAINLINK_RATE,
+        CHAINLINK_SMARTDATA,
+        CHAINLINK_MACRO,
+        CHAINLINK_EQUITY
+    }
+
+    enum CompositeLogic {
+        And,
+        Or,
+        Majority
     }
 
     enum Condition {
@@ -59,7 +79,8 @@ library MarketTypes {
     }
 
     enum OracleKind {
-        Chainlink
+        Chainlink,
+        TrustedReporter
     }
 
     enum CancelReason {
@@ -147,6 +168,24 @@ library MarketTypes {
         uint64 oracleMaxDelaySeconds;
         /// @dev 0 = inherit global `max_confidence_bps`.
         uint16 oracleMaxConfidenceBps;
+        /// @dev Per-template oracle routing. `Chainlink` uses `oracleFeedId` + global `priceOracle`.
+        OracleKind templateOracleKind;
+        /// @dev Oracle family routing for Chainlink-kind templates.
+        OracleClass oracleClass;
+        /// @dev For `TrustedReporter`, the `IEventOracle` adapter (e.g. TrustedReporterAdapter). Otherwise zero.
+        address eventOracle;
+        /// @dev For Cascade: false=upward via high watermark, true=downward via low watermark.
+        bool cascadeDownward;
+        int256 anchorPriceE8;
+        uint32[RANGE_BOUNDS_LEN] velocityBoundsE4;
+        int256[RANGE_BOUNDS_LEN] ladderBoundsE8;
+        uint16[MAX_OUTCOMES] ladderPayoutWeightsBps;
+        bytes32 oracleFeedIdB;
+        uint16 spreadToleranceBps;
+        bytes32[4] compositeFeedIds;
+        Condition[4] compositeConditions;
+        uint8 compositeFeedCount;
+        CompositeLogic compositeLogic;
     }
 
     struct Ledger {
@@ -211,6 +250,27 @@ library MarketTypes {
         uint256 totalRefundLiability;
         uint256 claimedTotal;
         uint256 remainingWinningStake;
+        OracleKind templateOracleKind;
+        address eventOracle;
+        int256 anchorPriceE8;
+        uint32[RANGE_BOUNDS_LEN] velocityBoundsE4;
+        int256[RANGE_BOUNDS_LEN] ladderBoundsE8;
+        uint16[MAX_OUTCOMES] ladderPayoutWeightsBps;
+        bytes32 oracleFeedIdB;
+        uint16 spreadToleranceBps;
+        bytes32[4] compositeFeedIds;
+        Condition[4] compositeConditions;
+        uint8 compositeFeedCount;
+        CompositeLogic compositeLogic;
+        OracleClass oracleClass;
+        bool cascadeDownward;
+        OracleCheckpoint checkpointA_B;
+        OracleCheckpoint checkpointB_B;
+        OracleCheckpoint[4] compositeCheckpointsA;
+        OracleCheckpoint[4] compositeCheckpointsB;
+        int256 epochHighE8;
+        int256 epochLowE8;
+        bool ohlcWritten;
     }
 
     struct Position {
@@ -245,7 +305,8 @@ library MarketTypes {
     /// @notice Whether this market type requires checkpoint A (lock-time oracle sample).
     /// @dev Direction markets compare checkpoint B vs checkpoint A to determine up/down.
     function requiresCheckpointAOnLock(Epoch storage e) internal view returns (bool) {
-        return e.marketType == MarketType.Direction;
+        return e.marketType == MarketType.Direction || e.marketType == MarketType.Velocity
+            || e.marketType == MarketType.Convergence || e.marketType == MarketType.Composite;
     }
 
     /// @notice Validate publishTime freshness for push oracles.

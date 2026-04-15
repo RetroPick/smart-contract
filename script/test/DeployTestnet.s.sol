@@ -13,10 +13,16 @@ import {MarketEngineCoreLifecycleModule} from "../../src/engine/modules/MarketEn
 import {MarketEngineRollingLifecycleModule} from "../../src/engine/modules/MarketEngineRollingLifecycleModule.sol";
 import {IMarketEngine} from "../../src/engine/IMarketEngine.sol";
 import {ChainlinkAdapter} from "../../src/adapters/ChainlinkAdapter.sol";
+import {RateAdapter} from "../../src/oracle/RateAdapter.sol";
+import {SmartDataAdapter} from "../../src/oracle/SmartDataAdapter.sol";
+import {MacroAdapter} from "../../src/oracle/MacroAdapter.sol";
+import {EquityAdapter} from "../../src/oracle/EquityAdapter.sol";
+import {TrustedReporterAdapter} from "../../src/oracle/TrustedReporterAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IPriceOracle} from "../../src/interfaces/IPriceOracle.sol";
 import {MarketTypes} from "../../src/types/MarketTypes.sol";
 import {TokenFaucet} from "../../src/test/faucet/TokenFaucet.sol";
+import {ScriptSelectorMatrix} from "../ScriptSelectorMatrix.sol";
 
 /// @notice Testnet deployment: same atomic UUPS init as production, with optional oracle smoke checks.
 /// @dev Run with `--ffi` so OpenZeppelin upgrades validations can run.
@@ -39,7 +45,12 @@ import {TokenFaucet} from "../../src/test/faucet/TokenFaucet.sol";
 /// - FAUCET_TOKEN_SYMBOL (default "dUSD")
 /// - FAUCET_COOLDOWN_SECONDS (default 3600)
 /// - FAUCET_MAX_MINT_AMOUNT (default 1000e18)
+///
+/// Optional (Trusted Reporter Oracle):
+/// - TRUSTED_REPORTER, TRO_MAX_SIGNATURE_AGE_SECONDS (same semantics as production script)
 contract DeployTestnet is Script {
+    event DeploymentCompleted(address indexed proxy, address indexed adapter);
+
     struct DeployInitParams {
         address stakeToken;
         address adapter;
@@ -54,6 +65,10 @@ contract DeployTestnet is Script {
     }
 
     function run() external {
+        uint256 expectedChainId = vm.envUint("EXPECTED_CHAIN_ID");
+        require(expectedChainId != 0, "EXPECTED_CHAIN_ID=0");
+        require(block.chainid == expectedChainId, "wrong chain");
+
         vm.startBroadcast();
 
         address sequencerFeed = vm.envAddress("SEQUENCER_FEED");
@@ -81,11 +96,27 @@ contract DeployTestnet is Script {
         uint64 delay = uint64(delayRaw);
 
         ChainlinkAdapter adapter = new ChainlinkAdapter(sequencerFeed);
+        RateAdapter rateAdapter = new RateAdapter(sequencerFeed);
+        SmartDataAdapter smartDataAdapter = new SmartDataAdapter(sequencerFeed);
+        MacroAdapter macroAdapter = new MacroAdapter(sequencerFeed);
+        EquityAdapter equityAdapter = new EquityAdapter(sequencerFeed);
+
+        address trustedReporter = vm.envOr("TRUSTED_REPORTER", address(0));
+        if (trustedReporter != address(0)) {
+            uint256 troMaxAgeRaw = vm.envOr("TRO_MAX_SIGNATURE_AGE_SECONDS", uint256(3600));
+            require(troMaxAgeRaw >= 60 && troMaxAgeRaw <= 48 hours, "TRO_MAX_SIGNATURE_AGE_SECONDS range");
+            TrustedReporterAdapter tro = new TrustedReporterAdapter(trustedReporter, admin, troMaxAgeRaw);
+            console2.log("TrustedReporterAdapter", address(tro));
+        }
 
         // Optional: deploy faucet + demo token for testnet UX.
         address stakeToken = vm.envOr("STAKE_TOKEN", address(0));
         uint256 deployFaucet = vm.envOr("DEPLOY_FAUCET", uint256(0));
         if (deployFaucet == 1) {
+            // Explicitly block faucet usage on production chain IDs.
+            uint256 mainnetChainId = vm.envOr("MAINNET_CHAIN_ID", uint256(1));
+            require(block.chainid != mainnetChainId, "faucet forbidden on mainnet");
+
             string memory name = vm.envOr("FAUCET_TOKEN_NAME", string("Demo USD"));
             string memory symbol = vm.envOr("FAUCET_TOKEN_SYMBOL", string("dUSD"));
             uint64 cooldownSeconds = uint64(vm.envOr("FAUCET_COOLDOWN_SECONDS", uint256(3600)));
@@ -139,8 +170,9 @@ contract DeployTestnet is Script {
         bytes memory initData = abi.encodeCall(MarketEngineDispatcher.initialize, (initConfig));
 
         Options memory opts;
+        opts.unsafeSkipAllChecks = vm.envOr("OZ_UNSAFE_SKIP_ALL_CHECKS", false);
         address proxy =
-            Upgrades.deployUUPSProxy("engine/MarketEngineDispatcher.sol:MarketEngineDispatcher", initData, opts);
+            Upgrades.deployUUPSProxy("MarketEngineDispatcher.sol:MarketEngineDispatcher", initData, opts);
         MarketEngineDispatcher dispatcher = MarketEngineDispatcher(payable(proxy));
         address adminModule = address(new MarketEngineAdminModule());
         address viewModule = address(new MarketEngineViewModule());
@@ -148,15 +180,15 @@ contract DeployTestnet is Script {
         address coreLifecycleModule = address(new MarketEngineCoreLifecycleModule());
         address rollingLifecycleModule = address(new MarketEngineRollingLifecycleModule());
         _wireModules(
-            dispatcher,
-            adminModule,
-            viewModule,
-            userOpsClaimsModule,
-            coreLifecycleModule,
-            rollingLifecycleModule
+            dispatcher, adminModule, viewModule, userOpsClaimsModule, coreLifecycleModule, rollingLifecycleModule
         );
 
         _verifyAndLogDeployment(proxy, p);
+        IMarketEngine(proxy).setRateOracle(address(rateAdapter));
+        IMarketEngine(proxy).setSmartDataOracle(address(smartDataAdapter));
+        IMarketEngine(proxy).setMacroOracle(address(macroAdapter));
+        IMarketEngine(proxy).setEquityOracle(address(equityAdapter));
+        emit DeploymentCompleted(proxy, p.adapter);
 
         vm.stopBroadcast();
     }
@@ -185,69 +217,15 @@ contract DeployTestnet is Script {
         address coreLifecycleModule,
         address rollingLifecycleModule
     ) internal {
-        dispatcher.setSelectorModule(bytes4(keccak256("pauseProgram(bool)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setTreasury(address)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setWorkerAuthority(address)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setDepositExecutor(address,bool)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setYieldRouter(address,uint16)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setLmRewardsEnabled(bool)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("keeperClaimLmRewards(bytes32)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("yieldEmergencyWithdraw(bytes32)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("initializeMarket(bytes32)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("withdrawFees(bytes32,uint256)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("getUserEpochs(bytes32,address,uint256,uint256)")), viewModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("getVaultBalances(bytes32)")), viewModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("getRollingLifecycle(bytes32)")), viewModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("getEpoch(bytes32,uint64)")), viewModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("depositToSide(bytes32,uint64,uint8,uint256)")), userOpsClaimsModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("depositToSideFor(address,bytes32,uint64,uint8,uint256)")), userOpsClaimsModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("switchSide(bytes32,uint64,uint8,uint8,uint256)")), userOpsClaimsModule, false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("claim(bytes32,uint64)")), userOpsClaimsModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("claimMany(bytes32,uint64[])")), userOpsClaimsModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(
-                keccak256(
-                    "upsertTemplate((string,string,bytes32,uint8,uint8,uint8,bool,uint8,int256,int256[7],uint16,uint16,bool,uint8,uint64,uint64,uint64,uint16))"
-                )
-            ),
-            coreLifecycleModule,
-            false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("openEpoch(bytes32,uint64,uint64,uint64,uint64)")), coreLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("openEpochsBatch(bytes32[],uint64[],uint64[],uint64[],uint64[])")),
-            coreLifecycleModule,
-            false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("lockEpoch(bytes32,uint64)")), coreLifecycleModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("lockEpochsBatch(bytes32[],uint64[])")), coreLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("resolveEpoch(bytes32,uint64)")), coreLifecycleModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("resolveEpochsBatch(bytes32[],uint64[])")), coreLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("cancelEpoch(bytes32,uint64,uint8,bool)")), coreLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("genesisStartRolling(bytes32)")), rollingLifecycleModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("genesisLockRolling(bytes32)")), rollingLifecycleModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("executeRollingRound(bytes32)")), rollingLifecycleModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("executeRollingRoundBatch(bytes32[])")), rollingLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("haltRollingMarket(bytes32)")), rollingLifecycleModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("cancelRollingEpochWhileHalted(bytes32,uint64,uint8,bool)")), rollingLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("resetRollingLifecycle(bytes32,uint64)")), rollingLifecycleModule, false
+        ScriptSelectorMatrix.wireAll(
+            dispatcher,
+            ScriptSelectorMatrix.Modules({
+                admin: adminModule,
+                viewModule: viewModule,
+                userOpsClaims: userOpsClaimsModule,
+                coreLifecycle: coreLifecycleModule,
+                rollingLifecycle: rollingLifecycleModule
+            })
         );
     }
 

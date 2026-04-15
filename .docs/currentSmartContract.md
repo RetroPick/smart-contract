@@ -1,6 +1,24 @@
 # RetroPick `MarketEngine` (rolling rounds prediction markets) — technical reference
 
-This is the deep, code-accurate documentation for the current Solidity implementation under the modular dispatcher architecture in [`src/engine/MarketEngineDispatcher.sol`](../src/engine/MarketEngineDispatcher.sol) and [`src/engine/modules/`](../src/engine/modules/). It focuses on: storage model, epoch/round lifecycle, rolling execution, oracle checkpoints, keeper behavior, deployment topology, and measured gas from [`.gas-snapshot`](../.gas-snapshot).
+## Breaking Migration Notice (Threshold-Type Consolidation)
+
+The market taxonomy has been simplified with a **breaking change**:
+
+- Removed enum variants: `Anchor`, `VolatilityBand`, `StakingAPR`, `BitcoinIRC`, `NAVThreshold`, `MacroEvent`
+- Consolidated into canonical types:
+  - `Threshold` absorbs threshold-style variants
+  - `Direction` absorbs direction-style BitcoinIRC behavior
+  - Specialized non-threshold families remain separate (`Velocity`, `Ladder`, `Convergence`, `Composite`, `Corridor`, `Cascade`, `RangeClose`)
+
+Old-to-new mapping:
+- `Anchor` -> `Threshold` (`anchorPriceE8` used as effective threshold when set)
+- `VolatilityBand` / `StakingAPR` -> `Threshold` + `oracleClass=CHAINLINK_RATE`
+- `NAVThreshold` -> `Threshold` + `oracleClass=CHAINLINK_SMARTDATA`
+- `MacroEvent` -> `Threshold` + `oracleClass=CHAINLINK_MACRO`
+- `BitcoinIRC` threshold mode -> `Threshold` + `oracleClass=CHAINLINK_RATE`
+- `BitcoinIRC` direction mode -> `Direction` + `oracleClass=CHAINLINK_RATE`
+
+This is the deep, code-accurate documentation for the current Solidity implementation under the modular dispatcher architecture in [`src/engine/MarketEngineDispatcher.sol`](../src/engine/MarketEngineDispatcher.sol) and [`src/engine/modules/`](../src/engine/modules/). It focuses on: storage model, epoch/round lifecycle, rolling execution, oracle checkpoints (Chainlink + trusted reporter), **all `MarketType` variants**, keeper behavior, deployment topology, and measured gas from [`.gas-snapshot`](../.gas-snapshot). File paths in code references are relative to the **repository root** (the `contract/` package).
 
 > Migration note: the historical monolith lives under [`.docs/legacyEngine.sol`](./legacyEngine.sol) for diff/reference only. Production paths use [`MarketEngineDispatcher`](../src/engine/MarketEngineDispatcher.sol) + [`src/engine/modules/`](../src/engine/modules/).
 
@@ -9,8 +27,11 @@ This is the deep, code-accurate documentation for the current Solidity implement
 - **Template**: A market definition keyed by `templateId`.
 - **Epoch**: One full market cycle (open → lock → resolve → claim). In product language this is often called a “round.”
 - **Ledger**: Per-template cursor + reserve accounting + rolling lifecycle state.
-- **Checkpoint A**: Oracle sample at **lock** for Direction markets (open price).
-- **Checkpoint B**: Oracle sample at **resolve** for all markets (close / settlement price).
+- **Checkpoint A**: Oracle sample at **lock** when `MarketTypes.requiresCheckpointAOnLock` is true (Direction, Velocity, Convergence, Composite on **Chainlink** paths).
+- **Checkpoint B**: Primary oracle sample at **resolve** (close / settlement scalar in `checkpointB.valueE8` for most types).
+- **Checkpoint A\_B / B\_B**: Second-feed lock/resolve samples for **Convergence** (Chainlink).
+- **Composite checkpoints**: Per-feed A/B arrays for **Composite** (Chainlink).
+- **OHLC fields**: `epochHighE8`, `epochLowE8`, `ohlcWritten` for **Corridor** / **Cascade** when resolved via **TrustedReporter** + `IEventOracle.getOhlcResult`.
 - **Manual**: Keeper runs discrete `openEpoch` / `lockEpoch` / `resolveEpoch`.
 - **Rolling**: Pancake-style pipeline: one keeper call advances resolve + lock + open per interval.
 
@@ -21,9 +42,10 @@ This is the **operator narrative** for the current codebase. Every call uses the
 ### 0.1 Cold deploy (one protocol instance on a chain)
 
 1. Deploy [`ChainlinkAdapter`](../src/adapters/ChainlinkAdapter.sol) (sequencer feed address or `address(0)` on L1).
-2. Deploy **`MarketEngineDispatcher`** behind an ERC-1967 UUPS proxy with `initialize(...)` in the initializer path ([`script/Deploy.s.sol`](../script/Deploy.s.sol) uses OpenZeppelin Foundry Upgrades — **`--ffi`** for validation).
-3. In the same broadcast, deploy **five module contracts** and register each public entrypoint with `setSelectorModule(selector, module, immutableFlag)` on the **proxy**:
-   - [`MarketEngineAdminModule`](../src/engine/modules/MarketEngineAdminModule.sol) — `pauseProgram`, `setTreasury` / `setWorkerAuthority`, `setDepositExecutor`, `setYieldRouter` / `setLmRewardsEnabled`, `keeperClaimLmRewards`, `yieldEmergencyWithdraw`, `initializeMarket`, `withdrawFees`
+2. Optionally deploy [`TrustedReporterAdapter`](../src/oracle/TrustedReporterAdapter.sol) for templates with `templateOracleKind == TrustedReporter` (`eventOracle` on the template points here; not used as `priceOracle` on `initialize`).
+3. Deploy **`MarketEngineDispatcher`** behind an ERC-1967 UUPS proxy with `initialize(...)` in the initializer path ([`script/production/DeployProduction.s.sol`](../script/production/DeployProduction.s.sol) for production and [`script/test/DeployTestnet.s.sol`](../script/test/DeployTestnet.s.sol) for testnet, both using OpenZeppelin Foundry Upgrades with **`--ffi`** validation).
+4. In the same broadcast, deploy **five module contracts** and register each public entrypoint with `setSelectorModule(selector, module, immutableFlag)` on the **proxy**:
+   - [`MarketEngineAdminModule`](../src/engine/modules/MarketEngineAdminModule.sol) — `pauseProgram`, `setTreasury` / `setWorkerAuthority`, `setDepositExecutor`, `setYieldRouter` / `setLmRewardsEnabled`, `setRateOracle` / `setSmartDataOracle` / `setMacroOracle` / `setEquityOracle`, `keeperClaimLmRewards`, `yieldEmergencyWithdraw`, `initializeMarket`, `withdrawFees`
    - [`MarketEngineCoreLifecycleModule`](../src/engine/modules/MarketEngineCoreLifecycleModule.sol) — `upsertTemplate`, manual `openEpoch` / `lockEpoch` / `resolveEpoch` (+ batches), `cancelEpoch` (when rolling is not `Live`)
    - [`MarketEngineRollingLifecycleModule`](../src/engine/modules/MarketEngineRollingLifecycleModule.sol) — `genesisStartRolling`, `genesisLockRolling`, `executeRollingRound` (+ batch), `haltRollingMarket`, `cancelRollingEpochWhileHalted`, `resetRollingLifecycle`
    - [`MarketEngineUserOpsClaimsModule`](../src/engine/modules/MarketEngineUserOpsClaimsModule.sol) — `depositToSide`, `depositToSideFor`, `switchSide`, `claim`, `claimMany`
@@ -99,7 +121,7 @@ The engine computes:
 - `templateId = keccak256(bytes(slug))`
 - `positionKey = keccak256(abi.encodePacked(templateId, epochId))`
 
-```186:192:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/engine/MarketEngineState.sol
+```190:196:src/engine/MarketEngineState.sol
     function templateIdFromSlug(string memory slug) public pure returns (bytes32) {
         return keccak256(bytes(slug));
     }
@@ -109,9 +131,27 @@ The engine computes:
     }
 ```
 
-### 1.2 Oracle adapter
+### 1.2 Oracle adapters and routing
 
-[`ChainlinkAdapter`](../src/adapters/ChainlinkAdapter.sol) implements [`IPriceOracle`](../src/interfaces/IPriceOracle.sol) over Chainlink [`AggregatorV3Interface`](../lib/chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol). It:
+The engine supports a multi-adapter Chainlink family:
+
+- [`ChainlinkAdapter`](../src/adapters/ChainlinkAdapter.sol) (`CHAINLINK_PRICE`)
+- [`RateAdapter`](../src/oracle/RateAdapter.sol) (`CHAINLINK_RATE`)
+- [`SmartDataAdapter`](../src/oracle/SmartDataAdapter.sol) (`CHAINLINK_SMARTDATA`)
+- [`MacroAdapter`](../src/oracle/MacroAdapter.sol) (`CHAINLINK_MACRO`)
+- [`EquityAdapter`](../src/oracle/EquityAdapter.sol) (`CHAINLINK_EQUITY`)
+
+At template level, `oracleClass` selects which adapter is used for reads. Routing is resolved by [`MarketEngineState._resolveOracle`](../src/engine/MarketEngineState.sol):
+
+- `CHAINLINK_RATE` → `rateOracle` (must be configured)
+- `CHAINLINK_SMARTDATA` → `smartDataOracle` (must be configured)
+- `CHAINLINK_MACRO` → `macroOracle` (must be configured)
+- `CHAINLINK_EQUITY` → `equityOracle` (must be configured)
+- otherwise defaults to `priceOracle` (`CHAINLINK_PRICE`)
+
+Admin configures non-default adapters through `setRateOracle`, `setSmartDataOracle`, `setMacroOracle`, and `setEquityOracle` on [`MarketEngineAdminModule`](../src/engine/modules/MarketEngineAdminModule.sol).
+
+The common price-feed behavior is inherited from the Chainlink adapter surface implementing [`IPriceOracle`](../src/interfaces/IPriceOracle.sol) over Chainlink [`AggregatorV3Interface`](../lib/chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol). For [`ChainlinkAdapter`](../src/adapters/ChainlinkAdapter.sol):
 
 - Decodes `feedId` as a Chainlink **proxy address**: `address(uint160(uint256(feedId)))`.
 - Reads `latestRoundData()`, enforces round completeness, positive `answer`, and staleness against `maxAgeSeconds` using `updatedAt`.
@@ -120,7 +160,7 @@ The engine computes:
 - On **L2**, checks the Chainlink **sequencer uptime feed** passed in the adapter constructor; on **L1** pass `sequencerFeed = address(0)` to skip. Grace-period behavior follows [Chainlink L2 sequencer feeds](https://docs.chain.link/data-feeds/l2-sequencer-feeds) (`timeSinceUp <= 3600` reverts until strictly after the grace window).
 - **Optional round ID surface**: the adapter also implements [`IPriceOracleWithRoundId`](../src/interfaces/IPriceOracleWithRoundId.sol) with `getNormalizedPriceWithRoundId(...)`, returning the Chainlink `roundId` from `latestRoundData()` alongside the normalized price. The engine uses this (when the cast succeeds) for **monotonic oracle cursor** checks per `(templateId, feedId)` plus `EpochLockedV2` / `EpochResolvedV2` events (see §9.4). If the oracle does not implement the extension, the engine falls back to `getNormalizedPrice` only.
 
-```32:60:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/adapters/ChainlinkAdapter.sol
+```32:60:src/adapters/ChainlinkAdapter.sol
     function getNormalizedPrice(bytes32 feedId, uint64 maxAgeSeconds, uint64)
         external
         view
@@ -153,16 +193,20 @@ The engine computes:
 
 ### 1.3 Deployment topology (UUPS proxy + modules)
 
-[`script/Deploy.s.sol`](../script/Deploy.s.sol) (with **`--ffi`** for OpenZeppelin upgrades checks):
+Canonical deploy scripts (both with **`--ffi`** for OpenZeppelin upgrades checks):
+- production: [`script/production/DeployProduction.s.sol`](../script/production/DeployProduction.s.sol)
+- testnet: [`script/test/DeployTestnet.s.sol`](../script/test/DeployTestnet.s.sol) (supports optional faucet deployment via `DEPLOY_FAUCET=1`)
 
 1. Reads env: `STAKE_TOKEN`, `SEQUENCER_FEED` (`address(0)` on L1), `ADMIN`, `TREASURY`, `WORKER`, fee caps, oracle globals.
-2. Deploys `ChainlinkAdapter(sequencerFeed)`.
+2. Deploys `ChainlinkAdapter(sequencerFeed)` plus `RateAdapter`, `SmartDataAdapter`, `MacroAdapter`, and `EquityAdapter`.
 3. Deploys a **UUPS proxy** for **`MarketEngineDispatcher`** with `initialize(IERC20,IPriceOracle,admin,treasury,worker,...)` (`OracleKind.Chainlink`).
 4. Deploys the five module contracts and calls `setSelectorModule` on the proxy for each routed function selector (admin / core lifecycle / rolling / user+claims / view).
+5. Sets non-default oracle adapters via `setRateOracle`, `setSmartDataOracle`, `setMacroOracle`, and `setEquityOracle`.
+6. Optionally deploys [`TrustedReporterAdapter`](../src/oracle/TrustedReporterAdapter.sol) when `TRUSTED_REPORTER` is provided; TrustedReporter is selected later per template (`templateOracleKind=TrustedReporter` + `eventOracle`).
 
 Core fragment:
 
-```66:94:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/script/Deploy.s.sol
+```70:98:script/production/DeployProduction.s.sol
         ChainlinkAdapter adapter = new ChainlinkAdapter(sequencerFeed);
 
         bytes memory initData = abi.encodeCall(
@@ -212,14 +256,44 @@ The engine’s core structs are in [`src/types/MarketTypes.sol`](../src/types/Ma
 
 ### 3.1 Template
 
-Important template fields:
+Canonical struct: [`src/types/MarketTypes.sol`](../src/types/MarketTypes.sol) (`Template`).
 
-- `marketType`: one of `Direction`, `Threshold`, `RangeClose`
-- `oracleFeedId`: Chainlink feed **proxy address** encoded as `bytes32(uint256(uint160(proxy)))` (must be non-zero when decoded)
+**Identity & fees**
+
+- `slug`, `assetSymbol` (length limits `SLUG_MAX_LEN`, `ASSET_SYMBOL_MAX_LEN`)
+- `marketType`: `Direction`, `Threshold`, `RangeClose`, `Anchor`, `Velocity`, `Ladder`, `Convergence`, `Composite`, `Corridor`, `Cascade`, `VolatilityBand`, `StakingAPR`, `BitcoinIRC`, `NAVThreshold`, `MacroEvent`
+- `condition` (`AtOrAbove` / `Below`), `thresholdRule` (`None` / `Absolute`) — validated per type
+- `outcomeCount` (≤ `MAX_OUTCOMES` = 8)
 - `switchFeeBps`, `settlementFeeBps`
+- `equalPriceVoids`, `feeOnLosingPool` — **currently forced** in `upsertTemplate` to `true` / `true` for all templates ([`MarketEngineCoreLifecycleModule`](../src/engine/modules/MarketEngineCoreLifecycleModule.sol))
+- `allowMultiSidePositions`
+
+**Execution mode**
+
 - `executionMode`: `Manual` or `Rolling`
-- rolling parameters (only if rolling): `rollingIntervalSeconds`, `rollingBufferSeconds`
-- oracle overrides: `oracleMaxDelaySeconds`, `oracleMaxConfidenceBps` (0 means “inherit global config” at effective-time via helper functions)
+- If `Rolling`: `rollingIntervalSeconds`, `rollingBufferSeconds` (must satisfy `buffer < interval`)
+
+**Oracle routing (per template)**
+
+- `templateOracleKind`: `Chainlink` or `TrustedReporter`
+- `oracleClass`: `CHAINLINK_PRICE`, `CHAINLINK_RATE`, `CHAINLINK_SMARTDATA`, `CHAINLINK_MACRO`, `CHAINLINK_EQUITY` (only meaningful on Chainlink templates; TrustedReporter templates route via `eventOracle`)
+- `oracleFeedId`: for **Chainlink**, feed id passed to `IPriceOracle` (typically `bytes32(uint256(uint160(proxy)))`). For **TrustedReporter**, must be **zero** at upsert.
+- `eventOracle`: for **TrustedReporter**, address of [`IEventOracle`](../src/interfaces/IEventOracle.sol) (e.g. [`TrustedReporterAdapter`](../src/oracle/TrustedReporterAdapter.sol)). For **Chainlink**, must be **zero**.
+
+**Type-specific parameters**
+
+- `absoluteThresholdValueE8`: Threshold / Composite (same threshold applied to each composite feed’s resolve sample in current code)
+- `rangeBoundsE8[RANGE_BOUNDS_LEN]`: strictly increasing interior bounds for bucketed types (`RangeClose`, `Ladder`, `Corridor`, `Cascade`, etc.)
+- `cascadeDownward`: **Cascade** direction flag (`false` = upward breaks via high watermark, `true` = downward breaks via low watermark)
+- `anchorPriceE8`: **Anchor**
+- `velocityBoundsE4[RANGE_BOUNDS_LEN]`: **Velocity** (bps-style bins; see §4)
+- `ladderBoundsE8[]`, `ladderPayoutWeightsBps[MAX_OUTCOMES]`: **Ladder**
+- `oracleFeedIdB`, `spreadToleranceBps`: **Convergence**
+- `compositeFeedIds[4]`, `compositeConditions[4]`, `compositeFeedCount`, `compositeLogic` (`And` / `Or` / `Majority`): **Composite**
+
+**Oracle tuning (epoch snapshot)**
+
+- `oracleMaxDelaySeconds`, `oracleMaxConfidenceBps` — `0` means inherit global `oracleConfig` at effective time
 
 ### 3.2 Ledger
 
@@ -232,7 +306,7 @@ Important ledger fields:
 
 Rolling lifecycle enums:
 
-```81:96:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/types/MarketTypes.sol
+```96:111:src/types/MarketTypes.sol
     enum RollingPhase {
         Uninitialized,
         GenesisOpen,
@@ -254,15 +328,17 @@ Rolling lifecycle enums:
 
 Each `(templateId, epochId)` stores one `MarketTypes.Epoch` struct with:
 
-- timings: `openAt`, `lockAt`, `resolveAt`
+- timings: `openAt`, `lockAt`, `resolveAt` (in `timing`)
 - status: `Open` → `Locked` → `Resolved` (or `Cancelled` / `Voided`)
-- oracle checkpoints: `checkpointA` and `checkpointB`
+- oracle checkpoints: `checkpointA`, `checkpointB`; plus `checkpointA_B`, `checkpointB_B` (Convergence); `compositeCheckpointsA[4]`, `compositeCheckpointsB[4]` (Composite)
+- OHLC: `epochHighE8`, `epochLowE8`, `ohlcWritten` (Corridor / Cascade with TRO)
 - pools: `outcomePools[]`, `totalPool`
-- settlement outputs: `winningOutcomeMask`, `claimLiabilityTotal`, `settlementFeeTotal`, `refundMode`, `claimable`
+- settlement outputs: `winningOutcomeMask`, `claimLiabilityTotal`, `settlementFeeTotal`, `refundMode`, `claimable`, `remainingWinningStake`, `claimedTotal`
+- snapshot of template fields needed for resolve: `marketType`, `condition`, fees, bounds, anchor/velocity/ladder/composite fields, `templateOracleKind`, `oracleClass`, `eventOracle`, `cascadeDownward`, etc.
 
 Status enum:
 
-```52:58:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/types/MarketTypes.sol
+```65:72:src/types/MarketTypes.sol
     enum EpochStatus {
         Scheduled,
         Open,
@@ -298,63 +374,153 @@ Event emitted once per `(templateId, epochId, user)` when the user is first inde
 
 ## 4) Market types and settlement semantics
 
-All market types settle using **checkpoint B** at resolve time. Only Direction also uses **checkpoint A** at lock time.
+Settlement is implemented in two places that **must stay logically aligned** for any `MarketType` change:
 
-The rule “Direction requires checkpoint A on lock” is explicit:
+- [`MarketEngineCoreLifecycleModule._computeSettlementOutputsWithEffectivePool`](../src/engine/modules/MarketEngineCoreLifecycleModule.sol) (manual resolve path)
+- [`MarketEngineRollingLifecycleModule._computeSettlementOutputsWithEffectivePool`](../src/engine/modules/MarketEngineRollingLifecycleModule.sol) (rolling resolve path)
 
-```247:249:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/types/MarketTypes.sol
+Pure outcome selection lives in [`src/logic/Resolvers.sol`](../src/logic/Resolvers.sol). Liability and per-user claims use [`src/math/MarketMath.sol`](../src/math/MarketMath.sol) (`computeClaimLiabilityComponents`, and **`computeLadderLiabilityComponents`** + claim helpers for **Ladder**).
+
+### 4.0 Checkpoint A on lock
+
+Lock-time oracle sampling is gated by `MarketTypes.requiresCheckpointAOnLock`:
+
+```292:297:src/types/MarketTypes.sol
     function requiresCheckpointAOnLock(Epoch storage e) internal view returns (bool) {
-        return e.marketType == MarketType.Direction;
+        return e.marketType == MarketType.Direction || e.marketType == MarketType.Velocity
+            || e.marketType == MarketType.Convergence || e.marketType == MarketType.Composite;
     }
 ```
 
-### 4.1 Direction (binary up/down vs checkpoint A)
+**Chainlink only for A:** manual `_lockEpoch` **reverts** if `requiresCheckpointAOnLock(e)` and `templateOracleKind == TrustedReporter` (`InvalidTemplate`), because multi-feed lock samples for Convergence/Composite are read from `priceOracle`, and Direction/Velocity need a numeric lock sample.
 
-- On lock: sample oracle and write checkpoint A (`valueE8`, `confidenceE8`, `publishTime`).
-- On resolve: sample oracle and write checkpoint B.
-- Winner: compare `b.valueE8` to `a.valueE8`:
-  - `b > a` → outcome index 0 wins
-  - `b < a` → outcome index 1 wins
-  - `b == a` → if `equalPriceVoids` then refund-mode; else outcome 1 wins
+### 4.1 Direction
 
-Resolver:
+- **Lock:** writes `checkpointA` (Chainlink). **Resolve:** writes `checkpointB`.
+- **Resolver:** `Resolvers.resolveDirection`; equal price can **void** (`refundMode`) when `equalPriceVoids`.
+- **Oracle:** **Chainlink only** at template level (`TrustedReporter` rejected for this `marketType` in `_validateOracleParams`).
 
-```29:39:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/logic/Resolvers.sol
-    function resolveDirection(
-        MarketTypes.OracleCheckpoint memory a,
-        MarketTypes.OracleCheckpoint memory b,
-        bool voidOnEqual
-    ) internal pure returns (bool voided, uint256 mask) {
-        if (!a.written || !b.written) revert InvalidEpochState();
-        if (b.valueE8 > a.valueE8) return (false, uint256(1) << 0);
-        if (b.valueE8 < a.valueE8) return (false, uint256(1) << 1);
-        if (voidOnEqual) return (true, 0);
-        return (false, uint256(1) << 1);
-    }
-```
+### 4.2 Threshold
 
-### 4.2 Threshold (binary yes/no vs fixed line at resolve)
+- **Lock:** no checkpoint A. **Resolve:** `checkpointB` vs `absoluteThresholdValueE8` / `condition`.
+- **Resolver:** `Resolvers.resolveThreshold`.
+- **Oracle:** Chainlink or TrustedReporter (scalar `getResult` for TRO resolve).
 
-- No oracle checkpoint at lock.
-- Resolve compares checkpoint B to `absoluteThresholdValueE8` with `condition` (AtOrAbove / Below).
+### 4.3 RangeClose
 
-```49:58:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/logic/Resolvers.sol
-    function resolveThreshold(
-        MarketTypes.Condition condition,
-        int256 thresholdValueE8,
-        MarketTypes.OracleCheckpoint memory b
-    ) internal pure returns (uint256 mask) {
-        if (!b.written) revert InvalidEpochState();
-        bool yes =
-            condition == MarketTypes.Condition.AtOrAbove ? b.valueE8 >= thresholdValueE8 : b.valueE8 < thresholdValueE8;
-        return yes ? (uint256(1) << 0) : (uint256(1) << 1);
-    }
-```
+- **Lock:** no A. **Resolve:** bucket `checkpointB.valueE8` with `rangeBoundsE8[]` (`outcomeCount` buckets).
+- **Resolver:** `Resolvers.resolveRangeClose`.
 
-### 4.3 RangeClose (N-outcome bucketed close at resolve)
+### 4.4 Anchor
 
-- No oracle checkpoint at lock.
-- Resolve writes checkpoint B and selects a bucket index by comparing `b.valueE8` with `rangeBoundsE8[]`.
+- **Lock:** no A. **Resolve:** same boolean test as Threshold but threshold is `anchorPriceE8`.
+- **Resolver:** `Resolvers.resolveAnchor` (delegates to threshold semantics).
+- **Validation:** `thresholdRule == Absolute`, `outcomeCount == 2`.
+
+### 4.5 Velocity
+
+- **Lock:** `checkpointA`; **Resolve:** `checkpointB`. Move magnitude vs `abs(A)` is scaled by `10_000` in `Resolvers.resolveVelocity` (same bucket walk as range markets over `velocityBoundsE4[]`).
+- **Resolver:** `Resolvers.resolveVelocity`.
+- **Oracle:** **Chainlink only** (same restriction as Direction / multi-feed types).
+
+### 4.6 Ladder
+
+- **Lock:** no A. **Resolve:** bucket `checkpointB.valueE8` with `ladderBoundsE8[]` (same bucket logic as `resolveRangeClose`).
+- **Resolver:** `Resolvers.resolveLadder`.
+- **Liability:** `MarketMath.computeLadderLiabilityComponents` using `ladderPayoutWeightsBps[winnerIndex]`; user claims use the same weighted distributable via `MarketMath` internals (see §8).
+
+### 4.7 Convergence
+
+- **Lock (Chainlink):** `checkpointA` from `oracleFeedId`, `checkpointA_B` from `oracleFeedIdB`.
+- **Resolve (Chainlink):** `checkpointB` and `checkpointB_B` the same way.
+- **Resolver:** `Resolvers.resolveConvergence` — compares absolute spread at lock vs resolve with `spreadToleranceBps`; can **void** (narrow band around unchanged spread).
+- **Validation:** `outcomeCount == 2`, `thresholdRule == Absolute`, `oracleFeedIdB != 0`.
+- **Rolling:** **not allowed** (`RollingInvalidParams` in `_validateTemplate`).
+- **Oracle:** **Chainlink only** at template level.
+
+### 4.8 Composite
+
+- **Lock (Chainlink):** `compositeCheckpointsA[i]` for each `compositeFeedIds[i]` up to `compositeFeedCount`.
+- **Resolve (Chainlink):** `compositeCheckpointsB[i]` similarly.
+- **Resolver:** `Resolvers.resolveComposite` with `compositeLogic` **And** / **Or** / **Majority**; each leg compares `checkpointsB[i].valueE8` to **`absoluteThresholdValueE8`** and `compositeConditions[i]` (single global threshold in current implementation).
+- **Validation:** `compositeFeedCount` in `[2,4]`, first feed non-zero, `outcomeCount == 2`, `thresholdRule == Absolute`.
+- **Rolling:** **not allowed**. **Oracle:** **Chainlink only** at template level.
+
+### 4.9 Corridor
+
+- **Lock:** no A (unless classified under a type that needs A — Corridor does not). **Resolve:** needs **high/low** for the epoch.
+- **TrustedReporter path:** after scalar `getResult` / `checkpointB`, engine reads `IEventOracle.getOhlcResult(positionKey)`; requires `written`; sets `epochHighE8`, `epochLowE8`, `ohlcWritten`.
+- **Resolver:** `Resolvers.resolveCorridor(high, low, upper, lower)` using **`rangeBoundsE8[1]`** as upper and **`rangeBoundsE8[0]`** as lower (see core lifecycle settlement branch).
+- **Chainlink-only template:** resolve **does not** populate OHLC fields; **do not use** Corridor with `templateOracleKind == Chainlink` — outcomes would be wrong.
+- **Rolling:** **not allowed**.
+
+### 4.10 Cascade
+
+- Same OHLC / TRO vs Chainlink caveats as **Corridor**.
+- **Resolver:** `Resolvers.resolveCascade(epochHighE8, epochLowE8, outcomeCount, rangeBoundsE8, cascadeDownward)`.
+- **Direction control:** `cascadeDownward=false` means upward resistance-break path; `cascadeDownward=true` means downward support-break path. This flag is copied from template to epoch during open.
+
+### 4.11 VolatilityBand
+
+- **Resolve:** threshold-style binary settlement using `Resolvers.resolveThreshold`.
+- **Validation:** `outcomeCount == 2`, `thresholdRule == Absolute`.
+- **Oracle:** **Chainlink only** at template level (`TrustedReporter` rejected in `_validateOracleParams`).
+- **Rolling:** allowed on Chainlink.
+
+### 4.12 StakingAPR
+
+- **Resolve:** threshold-style binary settlement using `Resolvers.resolveThreshold`.
+- **Validation:** `outcomeCount == 2`, `thresholdRule == Absolute`.
+- **Oracle:** **Chainlink only** at template level.
+- **Rolling:** allowed on Chainlink.
+
+### 4.13 BitcoinIRC
+
+- **Resolve (dual mode):**
+  - if `absoluteThresholdValueE8 == 0`, uses direction semantics (`Resolvers.resolveDirection`) with lock+resolve checkpoints;
+  - otherwise uses threshold semantics (`Resolvers.resolveThreshold`).
+- **Validation:** `outcomeCount == 2`, `thresholdRule` may be `Absolute` or `None`.
+- **Oracle:** **Chainlink only** at template level.
+- **Rolling:** allowed on Chainlink.
+
+### 4.14 NAVThreshold
+
+- **Resolve:** threshold-style binary settlement using `Resolvers.resolveThreshold`.
+- **Validation:** `outcomeCount == 2`, `thresholdRule == Absolute`.
+- **Oracle:** **Chainlink only** at template level.
+- **Rolling:** allowed on Chainlink.
+
+### 4.15 MacroEvent
+
+- **Resolve:** threshold-style binary settlement using `Resolvers.resolveThreshold`.
+- **Validation:** `outcomeCount == 2`, `thresholdRule == Absolute`.
+- **Oracle:** **Chainlink only** at template level.
+- **Rolling:** allowed on Chainlink.
+
+### 4.16 Execution mode × oracle (summary)
+
+| Market type | Manual + Chainlink | Manual + TrustedReporter | Rolling + Chainlink | Rolling + TrustedReporter |
+|-------------|-------------------|---------------------------|---------------------|---------------------------|
+| Direction | Yes | **No** (upsert) | Yes | **No** (TRO rejects rolling) |
+| Threshold | Yes | Yes | Yes | **No** |
+| RangeClose | Yes | Yes | Yes | **No** |
+| Anchor | Yes | Yes | Yes | **No** |
+| Velocity | Yes | **No** (upsert) | Yes | **No** |
+| Ladder | Yes | Yes | Yes | **No** |
+| Convergence | Yes | **No** (upsert) | **No** (rolling blocked) | **No** |
+| Composite | Yes | **No** (upsert) | **No** | **No** |
+| Corridor | **Unsafe** (OHLC not filled on Chainlink path) | **Intended** (TRO + `getOhlcResult`) | **No** | **No** |
+| Cascade | **Unsafe** (same as Corridor) | **Intended** | **No** | **No** |
+| VolatilityBand | Yes | **No** (upsert) | Yes | **No** |
+| StakingAPR | Yes | **No** (upsert) | Yes | **No** |
+| BitcoinIRC | Yes | **No** (upsert) | Yes | **No** |
+| NAVThreshold | Yes | **No** (upsert) | Yes | **No** |
+| MacroEvent | Yes | **No** (upsert) | Yes | **No** |
+
+**Global rules**
+
+- `_validateOracleParams`: **TrustedReporter + Rolling** always reverts.
+- `_validateTemplate`: **Rolling +** (`Convergence` | `Composite` | `Corridor` | `Cascade`) reverts.
 
 ## 5) Manual mode: epoch lifecycle (keeper and users)
 
@@ -362,13 +528,13 @@ Manual mode is the classic discrete 3-tx epoch lifecycle per template:
 
 1. **`openEpoch`**: create epoch `epochId` with schedule; sets `ledger.activeEpochId = epochId`.
 2. **User ops**: `depositToSide`, `switchSide` during `[openAt, lockAt)`.
-3. **`lockEpoch`**: after `lockAt`. If Direction, writes checkpoint A; otherwise locks without oracle.
-4. **`resolveEpoch`**: after `resolveAt`. Writes checkpoint B; computes `winningOutcomeMask`, reserves claims/fees, sets `claimable`.
+3. **`lockEpoch`**: after `lockAt`. If `requiresCheckpointAOnLock`, samples **Chainlink** (`priceOracle`) and writes `checkpointA` (and extra A checkpoints for Convergence/Composite); TrustedReporter templates that need A **cannot** use this path (revert). Otherwise transitions to `Locked` without A.
+4. **`resolveEpoch`**: after `resolveAt`. Writes `checkpointB` (and B\_B / composite B / OHLC as needed); runs settlement; reserves claims/fees; sets `claimable`.
 5. **`claim` / `claimMany`**: users pull payouts or refunds (batch claim uses one token transfer).
 
 Manual sequencing is strict: the engine enforces `epochId == activeEpochId + 1` and cannot open the next epoch until the previous has completed.
 
-```466:469:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/engine/modules/MarketEngineCoreLifecycleModule.sol
+```657:660:src/engine/modules/MarketEngineCoreLifecycleModule.sol
     function _requireCanOpenNextEpoch(MarketTypes.Ledger storage ledger, uint64 epochId) internal view {
         if (ledger.activeEpochId != ledger.lastResolvedEpochId) revert PreviousEpochUnresolved();
         if (epochId != ledger.activeEpochId + 1) revert EpochAlreadyExists();
@@ -389,15 +555,23 @@ sequenceDiagram
   U->>E: depositToSide(templateId,epochId,outcome,amount)
   U->>E: switchSide(templateId,epochId,from,to,grossAmount)
   K->>E: lockEpoch(templateId,epochId)
-  E->>O: getNormalizedPrice(feedId,maxDelay,nowTs) (Direction_only)
+  E->>O: getNormalizedPrice / multi-feed (if requiresCheckpointAOnLock, Chainlink)
   K->>E: resolveEpoch(templateId,epochId)
-  E->>O: getNormalizedPrice(feedId,maxDelay,nowTs)
+  E->>O: Chainlink and/or IEventOracle (TRO, OHLC for Corridor/Cascade)
   U->>E: claim(templateId,epochId) / claimMany
 ```
 
 ## 6) Rolling mode: pipeline design (keeper cost reduction)
 
-Rolling mode is a keeper-efficiency mode supported for **all market types** (`Direction`, `Threshold`, `RangeClose`). The key idea is that steady-state progression is **one keeper transaction per interval**, rather than three.
+Rolling mode reduces keeper transactions by chaining **resolve → lock → open** in one call during steady state. It is only available when `executionMode == Rolling` and **`templateOracleKind == Chainlink`** (TrustedReporter templates **cannot** be rolling: `_validateOracleParams`).
+
+**Market types allowed to use rolling** are those that pass `_validateTemplate`. The engine **reverts** `RollingInvalidParams` if rolling is combined with **`Convergence`, `Composite`, `Corridor`, or `Cascade`** — those four are **manual-only** (they need multi-feed reads and/or TRO OHLC that the rolling tick does not implement).
+
+**Practical rolling + Chainlink set:** `Direction`, `Threshold`, `RangeClose`, `Anchor`, `Velocity`, `Ladder`, `VolatilityBand`, `StakingAPR`, `BitcoinIRC`, `NAVThreshold`, `MacroEvent`.
+
+**Settlement in rolling** uses [`MarketEngineRollingLifecycleModule._computeSettlementOutputsWithEffectivePool`](../src/engine/modules/MarketEngineRollingLifecycleModule.sol): explicit branches exist for Direction, Threshold, RangeClose, Anchor, Velocity, Ladder, VolatilityBand, StakingAPR, BitcoinIRC, NAVThreshold, MacroEvent, with fallback handling for Cascade. The current rolling constraints keep `Convergence`, `Composite`, `Corridor`, and `Cascade` out of rolling, so this dispatch remains safe.
+
+**Oracle reads in rolling:** each steady-state tick uses **one** primary-feed sample from `t.oracleFeedId` (`_resolveAndLockRound` → `_tryReadOracle`). That sample resolves the previous epoch’s `checkpointB` and, when `requiresCheckpointAOnLock` holds for the **currently locking** epoch, writes the **same** prices as `checkpointA` for the new lock — the usual Pancake-style link. **Secondary feeds for Convergence/Composite are never read in rolling** (those types are disallowed).
 
 Rolling invariants in steady state (`k = activeEpochId`):
 
@@ -436,44 +610,39 @@ Rolling cannot start directly in steady-state; it needs genesis to create the in
    - sets `rollingPhase = GenesisOpen`
 
 2. `genesisLockRolling(templateId)` (must be within the lock window + buffer)
-   - locks epoch `k = activeEpochId` (writes checkpoint A only for Direction)
+   - locks epoch `k = activeEpochId` — if `requiresCheckpointAOnLock`, `_applyGenesisLockWithOracle` reads **`t.oracleFeedId`** once and writes `checkpointA` (same pattern as steady state: **primary feed only**)
    - opens the next epoch
    - sets `rollingPhase = Live`
    - if oracle fails / confidence too wide / buffer missed: sets `Halted` and **returns** (no revert)
 
 ### 6.3 Steady-state tick (`executeRollingRound`)
 
-One tick does:
+One tick (`_executeRollingRoundCore` → `_resolveAndLockRound`):
 
-- resolve epoch `prev = k-1` (writes checkpoint B)
-- lock epoch `k` (writes checkpoint A only for Direction)
+- resolve epoch `prev = k-1` (writes `checkpointB` on `prev` from the shared oracle sample)
+- lock epoch `k` (writes `checkpointA` when `requiresCheckpointAOnLock(eCur)` using the **same** sample; otherwise empty lock)
 - open epoch `k+1`
 
-Critically, rolling uses **one normalized oracle sample** for resolve (checkpoint B on `prev`). For **Direction** templates only, the same sample is also used to write checkpoint A on lock for `k`. For non-Direction templates, lock does not consume an oracle sample (checkpoint A remains unwritten).
+Steady-state wiring (single primary-feed read, then resolve + conditional lock + open):
 
-Core gating and halt behavior (single oracle read via `_tryReadOracle`, then resolve + lock + open) in [`MarketEngineRollingLifecycleModule`](../src/engine/modules/MarketEngineRollingLifecycleModule.sol):
-
-```212:230:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/engine/modules/MarketEngineRollingLifecycleModule.sol
-        (bool ok, int256 priceE8, uint64 publishTime, uint256 confidenceE8, uint80 oracleRoundId) =
-            _tryReadOracle(templateId, t.oracleFeedId, maxDelay, nowTs);
-        if (!ok) {
-            _haltRolling(templateId, ledger, MarketTypes.RollingHaltReason.OracleFailure, k);
+```218:231:src/engine/modules/MarketEngineRollingLifecycleModule.sol
+        if (!_resolveAndLockRound(
+                templateId,
+                prev,
+                k,
+                t.oracleFeedId,
+                maxDelay,
+                maxConf,
+                nowTs,
+                MarketTypes.requiresCheckpointAOnLock(eCur)
+            )) {
             return;
-        }
-        if (!_confidenceWithinBand(priceE8, confidenceE8, maxConf)) {
-            _haltRolling(templateId, ledger, MarketTypes.RollingHaltReason.OracleConfidenceWide, k);
-            return;
-        }
-
-        _finishResolveEpochRolling(templateId, prev, priceE8, publishTime, confidenceE8, oracleRoundId, maxDelay);
-        if (MarketTypes.requiresCheckpointAOnLock(eCur)) {
-            _applyLock(templateId, k, priceE8, publishTime, confidenceE8, oracleRoundId, maxDelay, maxConf, nowTs);
-        } else {
-            _applyLock(templateId, k, 0, 0, 0, 0, 0, 0, nowTs);
         }
         uint64 newOpen = _openRollingEpoch(templateId, nowTs, t);
         emit RollingRoundExecuted(templateId, prev, k, newOpen);
 ```
+
+`_resolveAndLockRound` internally calls `_tryReadOracle(templateId, oracleFeedId, ...)`, then `_finishResolveEpoch` / `_applyLockFromSample` following the `needsCheckpointA` flag.
 
 ### 6.4 User operations under rolling
 
@@ -485,9 +654,11 @@ User ops (`depositToSide`, `switchSide`) are allowed only when:
 
 [`MarketEngineUserOpsClaimsModule`](../src/engine/modules/MarketEngineUserOpsClaimsModule.sol) / deposit path:
 
-```133:142:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/engine/modules/MarketEngineUserOpsClaimsModule.sol
-        if (t.executionMode == MarketTypes.ExecutionMode.Rolling && ledger.rollingPhase == MarketTypes.RollingPhase.Halted)
-        {
+```129:141:src/engine/modules/MarketEngineUserOpsClaimsModule.sol
+        if (
+            t.executionMode == MarketTypes.ExecutionMode.Rolling
+                && ledger.rollingPhase == MarketTypes.RollingPhase.Halted
+        ) {
             revert RollingHaltedUserOps();
         }
         _requireActiveEpoch(ledger, epochId);
@@ -522,12 +693,11 @@ stateDiagram-v2
 
 At resolve:
 
-- checkpoint B is written (and checkpoint A must already exist for Direction).
-- `Resolvers` computes the winning mask (or voids in equal-price Direction if configured).
-- `MarketMath.computeEpochClaimLiabilityStorage(...)` computes:
-  - `claimLiabilityTotal` moved from active → claims reserve
-  - `settlementFeeTotal` moved from active → fees reserve
-- The epoch becomes `claimable`.
+- Checkpoints are written per type (see §4): at minimum `checkpointB`; types needing lock-time data must already have `checkpointA` (and extras) before resolve.
+- `Resolvers` computes `winningOutcomeMask` (or refund mode for Direction equal-price void, Convergence band void, etc.).
+- Liability: `MarketMath.computeClaimLiabilityComponents` for most types; **`computeLadderLiabilityComponents`** for **Ladder** (tier `ladderPayoutWeightsBps[winnerIndex]` scales how much of the post-fee losing pool is distributable; the remainder stays as fee-side accounting).
+- Effective pool for settlement includes **net routed yield** added at resolve when a yield router is configured (see §13.5).
+- Reserves: `claimLiabilityTotal` and `settlementFeeTotal` move from active → claims / fee reserves; epoch becomes `claimable`.
 
 At claim:
 
@@ -540,14 +710,14 @@ At claim:
 
 Claim and fee withdrawal (core paths) live in [`MarketEngineUserOpsClaimsModule`](../src/engine/modules/MarketEngineUserOpsClaimsModule.sol) / [`MarketEngineAdminModule`](../src/engine/modules/MarketEngineAdminModule.sol):
 
-```103:118:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/engine/modules/MarketEngineUserOpsClaimsModule.sol
-    function claim(bytes32 templateId, uint64 epochId) external {
+```100:115:src/engine/modules/MarketEngineUserOpsClaimsModule.sol
+    function claim(bytes32 templateId, uint64 epochId) external nonReentrant {
         uint256 amount = _claimOne(templateId, epochId, msg.sender);
         stakeToken.safeTransfer(msg.sender, amount);
         emit Claimed(templateId, epochId, msg.sender, amount);
     }
 
-    function claimMany(bytes32 templateId, uint64[] calldata epochIds) external {
+    function claimMany(bytes32 templateId, uint64[] calldata epochIds) external nonReentrant {
         uint256 total = 0;
         for (uint256 i = 0; i < epochIds.length; i++) {
             uint256 amt = _claimOne(templateId, epochIds[i], msg.sender);
@@ -559,9 +729,9 @@ Claim and fee withdrawal (core paths) live in [`MarketEngineUserOpsClaimsModule`
     }
 ```
 
-`MarketMath.computeClaimPayoutStorage` (third argument is **remaining** claim pool for that epoch):
+`MarketMath.computeClaimPayoutStorage` (third argument is **remaining** claim pool for that epoch). For **Ladder**, `distributableLosing` follows the same weighted ladder liability as at resolve (`_distributableLosingPoolForClaimsStorage`).
 
-```164:188:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/math/MarketMath.sol
+```227:250:src/math/MarketMath.sol
     function computeClaimPayoutStorage(
         MarketTypes.Epoch storage epoch,
         uint256[8] memory stakes,
@@ -576,8 +746,7 @@ Claim and fee withdrawal (core paths) live in [`MarketEngineUserOpsClaimsModule`
                 winningPool += epoch.outcomePools[i];
             }
         }
-        (,, uint256 distributableLosing) =
-            computeClaimLiabilityComponents(epoch.totalPool, winningPool, epoch.settlementFeeBps, epoch.feeOnLosingPool);
+        uint256 distributableLosing = _distributableLosingPoolForClaimsStorage(epoch, winningPool);
         uint256 entitlement = userWinningStake_ + (userWinningStake_ * distributableLosing) / winningPool;
 
         if (epoch.remainingWinningStake == userWinningStake_) {
@@ -589,7 +758,7 @@ Claim and fee withdrawal (core paths) live in [`MarketEngineUserOpsClaimsModule`
     }
 ```
 
-```98:110:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/engine/modules/MarketEngineAdminModule.sol
+```100:112:src/engine/modules/MarketEngineAdminModule.sol
     function withdrawFees(bytes32 templateId, uint256 amount) external {
         if (msg.sender != treasury && msg.sender != admin) revert Unauthorized();
         if (!configInitialized) revert Unauthorized();
@@ -609,14 +778,14 @@ Claim and fee withdrawal (core paths) live in [`MarketEngineUserOpsClaimsModule`
 
 ### 9.1 Staleness window (maxDelaySeconds)
 
-The oracle adapter reads `getPriceNoOlderThan(feedId, maxAgeSeconds)`. The engine computes the effective staleness window from:
+The oracle adapter enforces max age via `getNormalizedPrice` / `getNormalizedPriceWithRoundId` (`maxAgeSeconds` / `maxDelay`). The engine computes the effective staleness window from:
 
 - epoch snapshot override (`epoch.oracleMaxDelaySeconds`) if non-zero, else
 - global `oracleConfig.maxDelaySeconds`.
 
 Helper:
 
-```311:314:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/types/MarketTypes.sol
+```359:362:src/types/MarketTypes.sol
     function effectiveOracleMaxDelaySeconds(Epoch storage e, uint64 globalDelaySeconds) internal view returns (uint64) {
         if (e.oracleMaxDelaySeconds > 0) return e.oracleMaxDelaySeconds;
         return globalDelaySeconds;
@@ -633,7 +802,7 @@ confidenceE8 \le |priceE8| \times \frac{maxConfidenceBps}{10_000}
 
 Absolute value of `priceE8` uses **inline assembly** so that `type(int256).min` does not trigger Solidity’s checked negation overflow; that case is then rejected explicitly (`InvalidOraclePrice`).
 
-```481:498:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/engine/modules/MarketEngineCoreLifecycleModule.sol
+```672:690:src/engine/modules/MarketEngineCoreLifecycleModule.sol
     function _enforceConfidence(int256 priceE8, uint256 confidenceE8, uint16 maxConfidenceBps) internal pure {
         if (!_confidenceWithinBand(priceE8, confidenceE8, maxConfidenceBps)) revert OracleConfidenceTooWide();
     }
@@ -648,6 +817,7 @@ Absolute value of `priceE8` uses **inline assembly** so that `type(int256).min` 
             abs := priceE8
             if slt(priceE8, 0) { abs := sub(0, priceE8) }
         }
+        // slither-disable-next-line incorrect-equality -- detects `type(int256).min` (no positive absolute value in int256).
         if (abs == (1 << 255)) revert InvalidOraclePrice();
         uint256 limit = (abs * uint256(maxConfidenceBps)) / 10_000;
         return confidenceE8 <= limit;
@@ -680,12 +850,27 @@ When `priceOracle` implements [`IPriceOracleWithRoundId`](../src/interfaces/IPri
 
 Augmented events (ABI-stable alongside legacy emits):
 
-- `EpochLockedV2(..., oracleRoundId)` when checkpoint A is written (Direction).
+- `EpochLockedV2(..., oracleRoundId)` when checkpoint A is written (any type with `requiresCheckpointAOnLock` on paths that emit it — e.g. manual/rolling lock with oracle).
 - `EpochResolvedV2(..., oracleRoundId, checkpointB, publishTime)` after checkpoint B is written.
 
 If the optional interface call **reverts**, the engine **falls back** to `IPriceOracle.getNormalizedPrice` and records `oracleRoundId = 0` for that read path.
 
 Rolling genesis / `executeRollingRound` use `_tryReadOracle` (no revert on oracle failure—**halt** instead) with the same cursor rules when the extended interface succeeds.
+
+### 9.5 Trusted reporter oracle (`IEventOracle`)
+
+Per-template **`templateOracleKind == TrustedReporter`** routes resolve (and optional lock samples) through [`IEventOracle`](../src/interfaces/IEventOracle.sol) at `eventOracle`, not through `priceOracle` for the scalar result.
+
+- **`getResult(marketId)`** / **`getResolveObservedAt`**: `marketId` MUST equal `positionKey(templateId, epochId)` ([`MarketEngineState.positionKey`](../src/engine/MarketEngineState.sol)).
+- **Lock sample** (`getLockSample`): used only where the product would post a lock price on the adapter; engine manual lock still **reverts** for types that need numeric Chainlink `checkpointA` from feeds (§4.0).
+- **OHLC** (`getOhlcResult`): required for **Corridor** / **Cascade** on the TRO path; adapter implementation is [`TrustedReporterAdapter`](../src/oracle/TrustedReporterAdapter.sol) with `postOhlcResult` (EIP-712 `OhlcClaim`).
+
+**Upsert constraints** ([`_validateOracleParams`](../src/engine/modules/MarketEngineCoreLifecycleModule.sol)):
+
+- TRO **cannot** be combined with **`Direction`, `Velocity`, `Convergence`, `Composite`**.
+- TRO **cannot** be combined with **`Rolling`** (any market type).
+
+Operational note: **`initialize`** on the dispatcher still sets the **global** `oracleConfig.oracleKind` to **Chainlink**; per-template `templateOracleKind` selects the settlement path for that market.
 
 ## 10) Rolling halt and recovery
 
@@ -699,7 +884,7 @@ Rolling keepers halt (set `rollingPhase = Halted`) when:
 - confidence too wide (`OracleConfidenceWide`)
 - admin halts (`ManualAdmin`)
 
-```498:508:/home/asyam/dev/Project/RetroPick/V1/contracts/retropick_v2_engine_solidity/src/engine/modules/MarketEngineRollingLifecycleModule.sol
+```702:712:src/engine/modules/MarketEngineRollingLifecycleModule.sol
     function _haltRolling(
         bytes32 templateId,
         MarketTypes.Ledger storage ledger,
@@ -771,7 +956,8 @@ There is no single stable “deployment gas cost” committed to this repo becau
 To measure on your target chain/environment:
 
 - Use `forge build --sizes` to see runtime size.
-- Use `forge script script/Deploy.s.sol --rpc-url ... --broadcast --slow` on a testnet or a local fork.
+- Use `forge script script/test/DeployTestnet.s.sol:DeployTestnet --rpc-url ... --ffi --broadcast --slow` on testnet (set `DEPLOY_FAUCET=1` if you want faucet + demo token).
+- Use `forge script script/DeployLocal.s.sol:DeployLocal --rpc-url ... --broadcast` for local development.
 - Use `--dry-run` / simulation to get `eth_estimateGas` style totals before broadcasting.
 
 ## 13) Limits and scaling notes

@@ -45,7 +45,7 @@ Chainlink is a **push oracle** — price data is already on-chain at all times, 
 | `MarketEngine.sol` | **Small logic change required**: accept Chainlink-style `updatedAt` that may be **before** `lockAt/resolveAt` as long as it is **fresh** (within `maxDelaySeconds`) and monotonic (checkpoint B ≥ checkpoint A). |
 | `MarketTypes.OracleKind` | Add `Chainlink` variant |
 | Template `oracleFeedId` | Was Pyth `bytes32` feed ID → becomes feed **address** cast to `bytes32` |
-| `Deploy.s.sol` | Deploy `ChainlinkAdapter` instead of `PythAdapter` |
+| `script/production/DeployProduction.s.sol` | Deploy `ChainlinkAdapter` instead of `PythAdapter` |
 | `MockPriceOracle.sol` | Unchanged (mock still implements `IPriceOracle`) |
 
 **What does NOT change:**
@@ -828,7 +828,7 @@ On Chainlink:
 ## 12. Deploy Script Changes
 
 ```solidity
-// script/Deploy.s.sol — updated sections
+// script/production/DeployProduction.s.sol — updated sections
 
 import {ChainlinkAdapter} from "../src/adapters/ChainlinkAdapter.sol";
 
@@ -1024,7 +1024,7 @@ remappings = [
 ### Deploy
 
 - [ ] Set `SEQUENCER_FEED` env var for target L2 (or `address(0)` for L1)
-- [ ] Deploy `ChainlinkAdapter(sequencerFeed)` in `Deploy.s.sol`
+- [ ] Deploy `ChainlinkAdapter(sequencerFeed)` in `script/production/DeployProduction.s.sol`
 - [ ] Pass `IPriceOracle(address(chainlinkAdapter))` to `initialize()`
 - [ ] Pass `OracleKind.Chainlink` to `initialize()`
 - [ ] Pass `oracleMaxConfidenceBps = 0` as global default to `initialize()`

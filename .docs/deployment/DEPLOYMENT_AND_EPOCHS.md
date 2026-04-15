@@ -88,7 +88,7 @@ These defaults **preserve** on-chain logic; they reduce **recurring spend** (esp
 
 ### Bytecode size gate (EIP-170) and upgrades
 
-[`MarketEngine`](src/MarketEngine.sol) is a **large** monolith (one **implementation** behind an ERC1967 **proxy**). Production uses **UUPS** ([`UUPSUpgradeable`](https://docs.openzeppelin.com/contracts/)): **`admin`** authorizes upgrades via `_authorizeUpgrade`. Deploy with [`script/Deploy.s.sol`](../script/Deploy.s.sol) (`Upgrades.deployUUPSProxy`); upgrade with [`script/UpgradeMarketEngine.s.sol`](../script/UpgradeMarketEngine.s.sol) (requires `--ffi` for OpenZeppelin validation).
+[`MarketEngine`](src/MarketEngine.sol) is a **large** monolith (one **implementation** behind an ERC1967 **proxy**). Production uses **UUPS** ([`UUPSUpgradeable`](https://docs.openzeppelin.com/contracts/)): **`admin`** authorizes upgrades via `_authorizeUpgrade`. Deploy with [`script/production/DeployProduction.s.sol`](../script/production/DeployProduction.s.sol) (`Upgrades.deployUUPSProxy`); upgrade with [`script/production/UpgradeProduction.s.sol`](../script/production/UpgradeProduction.s.sol) or [`script/test/UpgradeTestnet.s.sol`](../script/test/UpgradeTestnet.s.sol) (requires `--ffi` for OpenZeppelin validation).
 
 The Ethereum **contract runtime code** limit is **24576** bytes (EIP-170). [`script/check-contract-sizes.sh`](../script/check-contract-sizes.sh) builds **`default`** and **`deploybudget`** and reports `MarketEngine` runtime size. Set **`STRICT_EIP170=1`** to **fail** the script if runtime exceeds **24576** B or headroom is below **`MIN_HEADROOM`** (default **384** B)—recommended before mainnet. With **`STRICT_EIP170=0`** (default in CI), oversize emits a **warning** so work can continue while bytecode is tuned. The **`production`** profile (`optimizer_runs = 1_000_000`) is **informational only** in that script; **do not deploy** that `MarketEngine` artifact if it exceeds EIP-170.
 
@@ -187,7 +187,7 @@ Rounded Direction Rolling ≈ `E × $0.0559`. Rows without Rolling use “—”
 
 ### Contracts and initialization
 
-Production flow: [`script/Deploy.s.sol`](script/Deploy.s.sol).
+Production flow: [`script/production/DeployProduction.s.sol`](../script/production/DeployProduction.s.sol).
 
 1. `new ChainlinkAdapter(sequencerFeed)` (see `SEQUENCER_FEED` env; `address(0)` on L1)
 2. Deploy **`MarketEngine`** **implementation** and an **ERC1967 proxy** whose delegatecall target is that implementation, with **`initialize(...)`** calldata passed in the proxy creation path (`Upgrades.deployUUPSProxy`).
@@ -354,7 +354,7 @@ Always recompute with: current `G` from [`.gas-snapshot`](.gas-snapshot), live g
 
 ## Creating a market instance (checklist)
 
-1. **Deploy stack** (once per chain/environment): `ChainlinkAdapter` + UUPS **proxy** for `MarketEngine` + `initialize` with your `stakeToken`, oracle adapter, `admin`, `treasury`, `workerAuthority`, fee caps, `maxOutcomes` (≤ 8), and oracle limits. See [README.md](./README.md) env table and [`Deploy.s.sol`](script/Deploy.s.sol).
+1. **Deploy stack** (once per chain/environment): `ChainlinkAdapter` + UUPS **proxy** for `MarketEngine` + `initialize` with your `stakeToken`, oracle adapter, `admin`, `treasury`, `workerAuthority`, fee caps, `maxOutcomes` (≤ 8), and oracle limits. See [README.md](./README.md) env table and [`script/production/DeployProduction.s.sol`](../script/production/DeployProduction.s.sol) (production) or [`script/test/DeployTestnet.s.sol`](../script/test/DeployTestnet.s.sol) (testnet, optional faucet).
 
 2. **Compute `templateId`**: `bytes32 templateId = engine.templateIdFromSlug("your-slug");` (or `keccak256(bytes("your-slug"))` off-chain).
 

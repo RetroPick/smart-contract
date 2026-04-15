@@ -403,7 +403,7 @@ This is mechanically identical to the existing claim math with netYield added to
 8	Integration tests — engine	2 days	Fork Arbitrum mainnet. Test full epoch lifecycle with real Aave v3.
 9	Halt/recovery tests	1 day	Simulate Aave withdraw() revert (mock utilisation cap). Assert fallback.
 10	Gas snapshot update	0.5 days	Run forge test --gas-report; update .gas-snapshot.
-11	Deploy script update	0.5 days	Deploy.s.sol: deploy YieldRouter after adapter; pass to engine initialize.
+11	Deploy script update	0.5 days	script/production/DeployProduction.s.sol: deploy YieldRouter after adapter; pass to engine initialize.
 12	UpgradeMarketEngine.s.sol	0.5 days	UUPS upgrade on testnet + mainnet. setYieldRouter() admin call.
 13	Internal audit / review	2 days	Scope: YieldRouter.sol + 3 diff hunks. Focus: reentrancy, over-withdraw, share accounting.
 —	Total	12.5 days	~2.5 engineer-weeks solo
@@ -509,7 +509,7 @@ src/YieldRouter.sol	New	~180 lines. Aave v3 wrapper. Per-template aToken share a
 src/MarketEngine.sol	Modified	Storage: +yieldRouter, +yieldFeeBps, __gap 48→46. _depositToSide: buffer split + yieldRouter.deposit(). _finishResolveEpoch: yieldRouter.withdraw() with try/catch + yield fee split. initialize: 2 new params. setYieldRouter() admin fn. yieldEmergencyWithdraw() admin fn. 5 new events.
 src/math/MarketMath.sol	Modified	computeEpochClaimLiabilityStorage: +netYield param; uses effectivePool = totalPool + netYield
 src/types/MarketTypes.sol	Modified	Epoch struct: +uint128 yieldAccruedNet, +uint128 yieldAccruedGross (append-only)
-script/Deploy.s.sol	Modified	Deploy YieldRouter after ChainlinkAdapter. Pass to engine initialize.
+script/production/DeployProduction.s.sol	Modified	Deploy YieldRouter after ChainlinkAdapter. Pass to engine initialize.
 script/UpgradeMarketEngine.s.sol	Modified	upgradeProxy call + initializeV2 with yieldRouter + yieldFeeBps
 test/YieldRouter.t.sol	New	Unit tests with MockAavePool (all deposit/withdraw/share/emergency paths)
 test/fork/YieldRouterFork.t.sol	New	Arbitrum mainnet fork integration tests

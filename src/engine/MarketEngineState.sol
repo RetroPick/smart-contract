@@ -17,6 +17,10 @@ import {IYieldRouterV2} from "../interfaces/IYieldRouterV2.sol";
 abstract contract MarketEngineState {
     IERC20 public stakeToken;
     IPriceOracle public priceOracle;
+    IPriceOracle public rateOracle;
+    IPriceOracle public smartDataOracle;
+    IPriceOracle public macroOracle;
+    IPriceOracle public equityOracle;
 
     bool public configInitialized;
     address public admin;
@@ -53,7 +57,7 @@ abstract contract MarketEngineState {
     mapping(bytes4 selector => address module) internal selectorToModule;
     mapping(bytes4 selector => bool immutableSelector) internal selectorImmutable;
 
-    uint256[45] private __gap;
+    uint256[41] private __gap;
 
     error Unauthorized();
     error InvalidAuthority();
@@ -99,11 +103,14 @@ abstract contract MarketEngineState {
     error NotDepositExecutor();
     error OracleRoundIdNotMonotonic(uint80 newRoundId, uint80 lastRoundId);
     error NonStandardStakeToken();
-    error OracleSampleNotMonotonic(uint80 newRoundId, uint80 lastRoundId, uint64 newPublishTime, uint64 lastPublishTime);
+    error OracleSampleNotMonotonic(
+        uint80 newRoundId, uint80 lastRoundId, uint64 newPublishTime, uint64 lastPublishTime
+    );
     error YieldWithdrawFailed();
     error ModuleNotSet(bytes4 selector);
     error InvalidModule();
     error SelectorImmutable(bytes4 selector);
+    error OracleAdapterNotConfigured();
 
     event ConfigInitialized(address admin, address treasury, address workerAuthority);
     event TemplateUpserted(
@@ -159,11 +166,7 @@ abstract contract MarketEngineState {
     );
     event YieldRouterSet(address indexed oldRouter, address indexed newRouter, uint16 yieldFeeBps);
     event EpochYieldAccrued(
-        bytes32 indexed templateId,
-        uint64 indexed epochId,
-        uint256 grossYield,
-        uint256 yieldFee,
-        uint256 netYield
+        bytes32 indexed templateId, uint64 indexed epochId, uint256 grossYield, uint256 yieldFee, uint256 netYield
     );
     event YieldRouterWithdrawFailed(bytes32 indexed templateId, uint64 indexed epochId, uint256 principal);
     event YieldRouterDepositFailed(bytes32 indexed templateId, uint256 attemptedAmount);
@@ -183,6 +186,10 @@ abstract contract MarketEngineState {
     event WorkerAuthorityUpdated(address indexed previousWorker, address indexed newWorker);
     event TreasuryUpdated(address indexed previousTreasury, address indexed newTreasury);
     event SelectorModuleSet(bytes4 indexed selector, address indexed module, bool immutableSelector);
+    event RateOracleSet(address indexed previousOracle, address indexed newOracle);
+    event SmartDataOracleSet(address indexed previousOracle, address indexed newOracle);
+    event MacroOracleSet(address indexed previousOracle, address indexed newOracle);
+    event EquityOracleSet(address indexed previousOracle, address indexed newOracle);
 
     modifier onlyAdmin() {
         if (msg.sender != admin) revert Unauthorized();
@@ -195,6 +202,30 @@ abstract contract MarketEngineState {
 
     function positionKey(bytes32 templateId, uint64 epochId) public pure returns (bytes32) {
         return keccak256(abi.encodePacked(templateId, epochId));
+    }
+
+    function _resolveOracleByClass(MarketTypes.OracleClass oracleClass) internal view returns (IPriceOracle) {
+        if (oracleClass == MarketTypes.OracleClass.CHAINLINK_RATE) {
+            if (address(rateOracle) == address(0)) revert OracleAdapterNotConfigured();
+            return rateOracle;
+        }
+        if (oracleClass == MarketTypes.OracleClass.CHAINLINK_SMARTDATA) {
+            if (address(smartDataOracle) == address(0)) revert OracleAdapterNotConfigured();
+            return smartDataOracle;
+        }
+        if (oracleClass == MarketTypes.OracleClass.CHAINLINK_MACRO) {
+            if (address(macroOracle) == address(0)) revert OracleAdapterNotConfigured();
+            return macroOracle;
+        }
+        if (oracleClass == MarketTypes.OracleClass.CHAINLINK_EQUITY) {
+            if (address(equityOracle) == address(0)) revert OracleAdapterNotConfigured();
+            return equityOracle;
+        }
+        return priceOracle;
+    }
+
+    function _resolveOracle(bytes32 templateId) internal view returns (IPriceOracle) {
+        return _resolveOracleByClass(_templates[templateId].oracleClass);
     }
 }
 // slither-disable-end uninitialized-state

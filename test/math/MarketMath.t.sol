@@ -6,12 +6,25 @@ import {MarketMath} from "../../src/math/MarketMath.sol";
 import {MarketTypes as MT} from "../../src/types/MarketTypes.sol";
 
 contract MarketMathHarness {
-    function computeClaimLiabilityComponents(uint256 totalPool, uint256 winningPool, uint16 feeBps, bool feeOnLosingPool)
-        external
-        pure
-        returns (uint256 claimLiabilityTotal, uint256 settlementFee, uint256 distributableLosingPool)
-    {
+    function computeClaimLiabilityComponents(
+        uint256 totalPool,
+        uint256 winningPool,
+        uint16 feeBps,
+        bool feeOnLosingPool
+    ) external pure returns (uint256 claimLiabilityTotal, uint256 settlementFee, uint256 distributableLosingPool) {
         return MarketMath.computeClaimLiabilityComponents(totalPool, winningPool, feeBps, feeOnLosingPool);
+    }
+
+    function computeLadderLiabilityComponents(
+        uint256 totalPool,
+        uint256 winningPool,
+        uint16 feeBps,
+        bool feeOnLosingPool,
+        uint16 winnerWeightBps
+    ) external pure returns (uint256 claimLiabilityTotal, uint256 settlementFee, uint256 distributableLosingPool) {
+        return MarketMath.computeLadderLiabilityComponents(
+            totalPool, winningPool, feeBps, feeOnLosingPool, winnerWeightBps
+        );
     }
 }
 
@@ -95,5 +108,39 @@ contract MarketMathTest is Test {
     function test_claimLiability_reverts_when_fee_exceeds_losing_pool() public {
         vm.expectRevert(MarketMath.MathOverflow.selector);
         harness.computeClaimLiabilityComponents(100, 99, 20_000, true);
+    }
+
+    function test_ladderLiability_full_weight_matches_standard() public view {
+        (uint256 cLadder,, uint256 dLadder) = harness.computeLadderLiabilityComponents(1000, 400, 500, true, 10_000);
+        (uint256 cStd,, uint256 dStd) = harness.computeClaimLiabilityComponents(1000, 400, 500, true);
+        assertEq(cLadder, cStd);
+        assertEq(dLadder, dStd);
+    }
+
+    function test_ladderLiability_half_weight_reduces_distributable_and_adds_to_fee() public view {
+        (uint256 claim, uint256 fee, uint256 dist) =
+            harness.computeLadderLiabilityComponents(1000, 400, 0, true, 5000);
+        (,, uint256 baseDist) = harness.computeClaimLiabilityComponents(1000, 400, 0, true);
+        assertEq(baseDist, 600);
+        assertEq(dist, 300);
+        assertEq(claim, 700);
+        assertEq(fee, 300);
+    }
+
+    function test_ladder_claim_entitlement_uses_weighted_distributable() public pure {
+        MT.Epoch memory epoch;
+        epoch.marketType = MT.MarketType.Ladder;
+        epoch.winningOutcomeMask = 1 << 1;
+        epoch.outcomeCount = 3;
+        epoch.totalPool = 1000;
+        epoch.outcomePools = [uint256(100), 400, 500, 0, 0, 0, 0, 0];
+        epoch.settlementFeeBps = 0;
+        epoch.feeOnLosingPool = true;
+        epoch.ladderPayoutWeightsBps = [uint16(10_000), 5000, 10_000, 0, 0, 0, 0, 0];
+
+        uint256[8] memory stakes;
+        stakes[1] = 400;
+        uint256 ent = MarketMath.computeTotalUserEntitlementResolved(epoch, stakes, 0, true);
+        assertEq(ent, 700);
     }
 }

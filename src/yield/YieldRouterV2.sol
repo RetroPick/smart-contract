@@ -61,7 +61,9 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
         uint256 grossReturned,
         uint256 liquidityIndex
     );
-    event YieldWithdrawnStata(bytes32 indexed templateId, uint256 principalRequested, uint256 sharesBurned, uint256 grossReturned);
+    event YieldWithdrawnStata(
+        bytes32 indexed templateId, uint256 principalRequested, uint256 sharesBurned, uint256 grossReturned
+    );
     event TemplateYieldPathSet(bytes32 indexed templateId, IYieldRouterV2.YieldPath path);
     event LMRewardsClaimed(bytes32 indexed templateId, address indexed rewardToken, uint256 amount);
     event EmergencyWithdrawV2(bytes32 indexed templateId, uint256 grossReturned);
@@ -101,7 +103,12 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
         _depositScaled(templateId, amount);
     }
 
-    function withdraw(bytes32 templateId, uint256 principalAmount) external override onlyEngine returns (uint256 grossAmount) {
+    function withdraw(bytes32 templateId, uint256 principalAmount)
+        external
+        override
+        onlyEngine
+        returns (uint256 grossAmount)
+    {
         return _withdrawScaled(templateId, principalAmount);
     }
 
@@ -270,7 +277,9 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
     function setTemplateYieldPath(bytes32 templateId, IYieldRouterV2.YieldPath path) external override onlyOwner {
         TemplateYield storage t = _templates[templateId];
         if (t.principal != 0 || t.scaledPrincipal != 0 || t.stataShares != 0) revert CannotChangePath();
-        if (path == IYieldRouterV2.YieldPath.StataToken && address(STATA_TOKEN) == address(0)) revert StataNotConfigured();
+        if (path == IYieldRouterV2.YieldPath.StataToken && address(STATA_TOKEN) == address(0)) {
+            revert StataNotConfigured();
+        }
         t.path = path;
         emit TemplateYieldPathSet(templateId, path);
     }

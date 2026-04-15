@@ -14,17 +14,41 @@ import {IMarketEngine} from "../src/engine/IMarketEngine.sol";
 ///   - YIELD_ROUTER (address)  (set to 0x0 to disable)
 ///   - YIELD_FEE_BPS (uint)    (0..10000)
 contract UpgradeMarketEngine_YieldRouting is Script {
+    event UpgradeCompleted(address indexed proxy, address indexed implementation);
+
     function run() external {
+        uint256 expectedChainId = vm.envUint("EXPECTED_CHAIN_ID");
+        require(expectedChainId != 0, "EXPECTED_CHAIN_ID=0");
+        require(block.chainid == expectedChainId, "wrong chain");
+
         address proxy = vm.envAddress("PROXY_ADDRESS");
         require(proxy != address(0), "PROXY_ADDRESS=0");
+
+        IMarketEngine engineBefore = IMarketEngine(proxy);
+        address stakeTokenBefore = address(engineBefore.stakeToken());
+        address priceOracleBefore = address(engineBefore.priceOracle());
+        address adminBefore = engineBefore.admin();
+        address treasuryBefore = engineBefore.treasury();
+        address workerBefore = engineBefore.workerAuthority();
 
         vm.startBroadcast();
 
         Options memory opts;
-        Upgrades.upgradeProxy(proxy, "engine/MarketEngineDispatcher.sol:MarketEngineDispatcher", "", opts);
+        opts.unsafeSkipAllChecks = vm.envOr("OZ_UNSAFE_SKIP_ALL_CHECKS", false);
+        Upgrades.upgradeProxy(proxy, "MarketEngineDispatcher.sol:MarketEngineDispatcher", "", opts);
+
+        IMarketEngine engineAfter = IMarketEngine(proxy);
+        require(engineAfter.configInitialized(), "configInitialized=false");
+        require(address(engineAfter.stakeToken()) == stakeTokenBefore, "stakeToken changed");
+        require(address(engineAfter.priceOracle()) == priceOracleBefore, "priceOracle changed");
+        require(engineAfter.admin() == adminBefore, "admin changed");
+        require(engineAfter.treasury() == treasuryBefore, "treasury changed");
+        require(engineAfter.workerAuthority() == workerBefore, "worker changed");
 
         console2.log("Upgraded proxy", proxy);
-        console2.log("New implementation", Upgrades.getImplementationAddress(proxy));
+        address implementation = Upgrades.getImplementationAddress(proxy);
+        console2.log("New implementation", implementation);
+        emit UpgradeCompleted(proxy, implementation);
 
         // Post-upgrade configuration (optional).
         address router = vm.envOr("YIELD_ROUTER", address(0));

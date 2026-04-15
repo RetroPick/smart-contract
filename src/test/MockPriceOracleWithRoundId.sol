@@ -15,8 +15,7 @@ contract MockPriceOracleWithRoundId is IPriceOracle, IPriceOracleWithRoundId {
     mapping(bytes32 => Data) public feeds;
 
     function set(bytes32 feedId, uint80 roundId, int256 priceE8, uint64 publishTime, uint256 confidenceE8) external {
-        feeds[feedId] =
-            Data({roundId: roundId, priceE8: priceE8, publishTime: publishTime, confidenceE8: confidenceE8});
+        feeds[feedId] = Data({roundId: roundId, priceE8: priceE8, publishTime: publishTime, confidenceE8: confidenceE8});
     }
 
     function getNormalizedPrice(bytes32 feedId, uint64, uint64)

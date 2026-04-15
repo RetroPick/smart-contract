@@ -86,4 +86,121 @@ library Resolvers {
         }
         return uint256(1) << idx;
     }
+
+    function resolveAnchor(
+        MarketTypes.Condition condition,
+        int256 anchorPriceE8,
+        MarketTypes.OracleCheckpoint memory b
+    ) internal pure returns (uint256 mask) {
+        return resolveThreshold(condition, anchorPriceE8, b);
+    }
+
+    function resolveVelocity(
+        MarketTypes.OracleCheckpoint memory a,
+        MarketTypes.OracleCheckpoint memory b,
+        uint8 outcomeCount,
+        uint32[7] memory velocityBoundsE4
+    ) internal pure returns (uint256 mask) {
+        if (!a.written || !b.written) revert InvalidEpochState();
+        if (outcomeCount < 2) revert InvalidTemplate();
+        int256 delta = b.valueE8 - a.valueE8;
+        uint256 absDelta = uint256(delta < 0 ? -delta : delta);
+        uint256 absBase = uint256(a.valueE8 < 0 ? -a.valueE8 : a.valueE8);
+        if (absBase == 0) revert InvalidEpochState();
+        uint256 moveBpsE4 = (absDelta * 10_000) / absBase;
+        uint256 idx;
+        if (moveBpsE4 < velocityBoundsE4[0]) {
+            idx = 0;
+        } else {
+            idx = uint256(outcomeCount) - 1;
+            for (uint256 i = 1; i < uint256(outcomeCount) - 1; i++) {
+                if (moveBpsE4 < velocityBoundsE4[i]) {
+                    idx = i;
+                    break;
+                }
+            }
+        }
+        return uint256(1) << idx;
+    }
+
+    function resolveLadder(
+        MarketTypes.OracleCheckpoint memory b,
+        uint8 outcomeCount,
+        int256[7] memory ladderBoundsE8
+    ) internal pure returns (uint256 mask) {
+        return resolveRangeClose(b, outcomeCount, ladderBoundsE8);
+    }
+
+    function resolveConvergence(
+        MarketTypes.OracleCheckpoint memory a1,
+        MarketTypes.OracleCheckpoint memory a2,
+        MarketTypes.OracleCheckpoint memory b1,
+        MarketTypes.OracleCheckpoint memory b2,
+        uint16 toleranceBps
+    ) internal pure returns (bool voided, uint256 mask) {
+        if (!a1.written || !a2.written || !b1.written || !b2.written) revert InvalidEpochState();
+        uint256 openSpread = uint256((a1.valueE8 - a2.valueE8) < 0 ? (a2.valueE8 - a1.valueE8) : (a1.valueE8 - a2.valueE8));
+        uint256 closeSpread =
+            uint256((b1.valueE8 - b2.valueE8) < 0 ? (b2.valueE8 - b1.valueE8) : (b1.valueE8 - b2.valueE8));
+        uint256 band = (openSpread * uint256(toleranceBps)) / 10_000;
+        if (closeSpread + band < openSpread) return (false, uint256(1) << 0);
+        if (closeSpread > openSpread + band) return (false, uint256(1) << 1);
+        return (true, 0);
+    }
+
+    function resolveComposite(
+        MarketTypes.CompositeLogic logic,
+        uint8 feedCount,
+        MarketTypes.Condition[4] memory conditions,
+        int256[4] memory thresholdsE8,
+        MarketTypes.OracleCheckpoint[4] memory checkpointsB
+    ) internal pure returns (uint256 mask) {
+        if (feedCount == 0 || feedCount > 4) revert InvalidTemplate();
+        uint256 trueCount = 0;
+        for (uint256 i = 0; i < feedCount; i++) {
+            if (!checkpointsB[i].written) revert InvalidEpochState();
+            bool met = conditions[i] == MarketTypes.Condition.AtOrAbove
+                ? checkpointsB[i].valueE8 >= thresholdsE8[i]
+                : checkpointsB[i].valueE8 < thresholdsE8[i];
+            if (met) trueCount++;
+        }
+        bool result;
+        if (logic == MarketTypes.CompositeLogic.And) {
+            result = trueCount == feedCount;
+        } else if (logic == MarketTypes.CompositeLogic.Or) {
+            result = trueCount > 0;
+        } else {
+            result = trueCount > feedCount / 2;
+        }
+        return result ? (uint256(1) << 0) : (uint256(1) << 1);
+    }
+
+    function resolveCorridor(int256 highE8, int256 lowE8, int256 upperBoundE8, int256 lowerBoundE8)
+        internal
+        pure
+        returns (uint256 mask)
+    {
+        if (highE8 >= upperBoundE8) return uint256(1) << 1;
+        if (lowE8 <= lowerBoundE8) return uint256(1) << 2;
+        return uint256(1) << 0;
+    }
+
+    function resolveCascade(int256 highE8, int256 lowE8, uint8 outcomeCount, int256[7] memory boundsE8, bool downward)
+        internal
+        pure
+        returns (uint256 mask)
+    {
+        if (outcomeCount < 2) revert InvalidTemplate();
+        uint256 levelsReached = 0;
+        uint256 maxLevels = uint256(outcomeCount) - 1;
+        for (uint256 i = 0; i < maxLevels; i++) {
+            if (downward) {
+                if (lowE8 <= boundsE8[i]) levelsReached++;
+            } else {
+                if (highE8 >= boundsE8[i]) levelsReached++;
+            }
+        }
+        if (levelsReached >= outcomeCount) levelsReached = outcomeCount - 1;
+        return uint256(1) << levelsReached;
+    }
 }

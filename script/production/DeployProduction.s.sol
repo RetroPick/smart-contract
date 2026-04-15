@@ -13,9 +13,15 @@ import {MarketEngineCoreLifecycleModule} from "../../src/engine/modules/MarketEn
 import {MarketEngineRollingLifecycleModule} from "../../src/engine/modules/MarketEngineRollingLifecycleModule.sol";
 import {IMarketEngine} from "../../src/engine/IMarketEngine.sol";
 import {ChainlinkAdapter} from "../../src/adapters/ChainlinkAdapter.sol";
+import {RateAdapter} from "../../src/oracle/RateAdapter.sol";
+import {SmartDataAdapter} from "../../src/oracle/SmartDataAdapter.sol";
+import {MacroAdapter} from "../../src/oracle/MacroAdapter.sol";
+import {EquityAdapter} from "../../src/oracle/EquityAdapter.sol";
+import {TrustedReporterAdapter} from "../../src/oracle/TrustedReporterAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IPriceOracle} from "../../src/interfaces/IPriceOracle.sol";
 import {MarketTypes} from "../../src/types/MarketTypes.sol";
+import {ScriptSelectorMatrix} from "../ScriptSelectorMatrix.sol";
 
 /// @notice Production deployment: deploy `ChainlinkAdapter` + UUPS proxy for `MarketEngine` with atomic `initialize`.
 /// @dev Run with `--ffi` so OpenZeppelin upgrades validations can run.
@@ -27,7 +33,13 @@ import {MarketTypes} from "../../src/types/MarketTypes.sol";
 /// - ADMIN, TREASURY, WORKER
 /// - DEFAULT_SETTLEMENT_FEE_BPS, MAX_SWITCH_FEE_BPS, MAX_OUTCOMES
 /// - ORACLE_MAX_DELAY_SECONDS, ORACLE_MAX_CONFIDENCE_BPS
+///
+/// Optional (Trusted Reporter Oracle — `upsertTemplate` with `templateOracleKind=TrustedReporter`):
+/// - TRUSTED_REPORTER: if non-zero, deploys `TrustedReporterAdapter(TRUSTED_REPORTER, ADMIN, maxAge)`
+/// - TRO_MAX_SIGNATURE_AGE_SECONDS (default 3600; must be within adapter min/max)
 contract DeployProduction is Script {
+    event DeploymentCompleted(address indexed proxy, address indexed adapter);
+
     struct DeployInitParams {
         address stakeToken;
         address adapter;
@@ -42,6 +54,10 @@ contract DeployProduction is Script {
     }
 
     function run() external {
+        uint256 expectedChainId = vm.envUint("EXPECTED_CHAIN_ID");
+        require(expectedChainId != 0, "EXPECTED_CHAIN_ID=0");
+        require(block.chainid == expectedChainId, "wrong chain");
+
         vm.startBroadcast();
 
         address stakeToken = vm.envAddress("STAKE_TOKEN");
@@ -68,6 +84,20 @@ contract DeployProduction is Script {
         require(confRaw <= 10_000, "ORACLE_MAX_CONFIDENCE_BPS>10000");
 
         ChainlinkAdapter adapter = new ChainlinkAdapter(sequencerFeed);
+        RateAdapter rateAdapter = new RateAdapter(sequencerFeed);
+        SmartDataAdapter smartDataAdapter = new SmartDataAdapter(sequencerFeed);
+        MacroAdapter macroAdapter = new MacroAdapter(sequencerFeed);
+        EquityAdapter equityAdapter = new EquityAdapter(sequencerFeed);
+
+        address trustedReporter = vm.envOr("TRUSTED_REPORTER", address(0));
+        if (trustedReporter != address(0)) {
+            uint256 troMaxAgeRaw = vm.envOr("TRO_MAX_SIGNATURE_AGE_SECONDS", uint256(3600));
+            // Bounds must match `TrustedReporterAdapter` constructor validation.
+            require(troMaxAgeRaw >= 60 && troMaxAgeRaw <= 48 hours, "TRO_MAX_SIGNATURE_AGE_SECONDS range");
+            TrustedReporterAdapter tro = new TrustedReporterAdapter(trustedReporter, admin, troMaxAgeRaw);
+            console2.log("TrustedReporterAdapter", address(tro));
+        }
+
         DeployInitParams memory p = DeployInitParams({
             stakeToken: stakeToken,
             adapter: address(adapter),
@@ -90,78 +120,24 @@ contract DeployProduction is Script {
         bytes memory initData = abi.encodeCall(MarketEngineDispatcher.initialize, (initConfig));
 
         Options memory opts;
+        opts.unsafeSkipAllChecks = vm.envOr("OZ_UNSAFE_SKIP_ALL_CHECKS", false);
         address proxy =
-            Upgrades.deployUUPSProxy("engine/MarketEngineDispatcher.sol:MarketEngineDispatcher", initData, opts);
+            Upgrades.deployUUPSProxy("MarketEngineDispatcher.sol:MarketEngineDispatcher", initData, opts);
         MarketEngineDispatcher dispatcher = MarketEngineDispatcher(payable(proxy));
         address adminModule = address(new MarketEngineAdminModule());
         address viewModule = address(new MarketEngineViewModule());
         address userOpsClaimsModule = address(new MarketEngineUserOpsClaimsModule());
         address coreLifecycleModule = address(new MarketEngineCoreLifecycleModule());
         address rollingLifecycleModule = address(new MarketEngineRollingLifecycleModule());
-
-        dispatcher.setSelectorModule(bytes4(keccak256("pauseProgram(bool)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setTreasury(address)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setWorkerAuthority(address)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setDepositExecutor(address,bool)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setYieldRouter(address,uint16)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setLmRewardsEnabled(bool)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("keeperClaimLmRewards(bytes32)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("yieldEmergencyWithdraw(bytes32)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("initializeMarket(bytes32)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("withdrawFees(bytes32,uint256)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("getUserEpochs(bytes32,address,uint256,uint256)")), viewModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("getVaultBalances(bytes32)")), viewModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("getRollingLifecycle(bytes32)")), viewModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("getEpoch(bytes32,uint64)")), viewModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("depositToSide(bytes32,uint64,uint8,uint256)")), userOpsClaimsModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("depositToSideFor(address,bytes32,uint64,uint8,uint256)")), userOpsClaimsModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("switchSide(bytes32,uint64,uint8,uint8,uint256)")), userOpsClaimsModule, false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("claim(bytes32,uint64)")), userOpsClaimsModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("claimMany(bytes32,uint64[])")), userOpsClaimsModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(
-                keccak256(
-                    "upsertTemplate((string,string,bytes32,uint8,uint8,uint8,bool,uint8,int256,int256[7],uint16,uint16,bool,uint8,uint64,uint64,uint64,uint16))"
-                )
-            ),
-            coreLifecycleModule,
-            false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("openEpoch(bytes32,uint64,uint64,uint64,uint64)")), coreLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("openEpochsBatch(bytes32[],uint64[],uint64[],uint64[],uint64[])")),
-            coreLifecycleModule,
-            false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("lockEpoch(bytes32,uint64)")), coreLifecycleModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("lockEpochsBatch(bytes32[],uint64[])")), coreLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("resolveEpoch(bytes32,uint64)")), coreLifecycleModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("resolveEpochsBatch(bytes32[],uint64[])")), coreLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("cancelEpoch(bytes32,uint64,uint8,bool)")), coreLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("genesisStartRolling(bytes32)")), rollingLifecycleModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("genesisLockRolling(bytes32)")), rollingLifecycleModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("executeRollingRound(bytes32)")), rollingLifecycleModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("executeRollingRoundBatch(bytes32[])")), rollingLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("haltRollingMarket(bytes32)")), rollingLifecycleModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("cancelRollingEpochWhileHalted(bytes32,uint64,uint8,bool)")), rollingLifecycleModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("resetRollingLifecycle(bytes32,uint64)")), rollingLifecycleModule, false
+        ScriptSelectorMatrix.wireAll(
+            dispatcher,
+            ScriptSelectorMatrix.Modules({
+                admin: adminModule,
+                viewModule: viewModule,
+                userOpsClaims: userOpsClaimsModule,
+                coreLifecycle: coreLifecycleModule,
+                rollingLifecycle: rollingLifecycleModule
+            })
         );
 
         // Lightweight post-deploy verification (still do independent RPC checks per ProductionChecklist).
@@ -172,13 +148,22 @@ contract DeployProduction is Script {
         require(engine.admin() == p.admin, "admin mismatch");
         require(engine.treasury() == p.treasury, "treasury mismatch");
         require(engine.workerAuthority() == p.worker, "worker mismatch");
+        engine.setRateOracle(address(rateAdapter));
+        engine.setSmartDataOracle(address(smartDataAdapter));
+        engine.setMacroOracle(address(macroAdapter));
+        engine.setEquityOracle(address(equityAdapter));
 
         console2.log("ChainlinkAdapter", address(adapter));
+        console2.log("RateAdapter", address(rateAdapter));
+        console2.log("SmartDataAdapter", address(smartDataAdapter));
+        console2.log("MacroAdapter", address(macroAdapter));
+        console2.log("EquityAdapter", address(equityAdapter));
         console2.log("MarketEngineDispatcher proxy", proxy);
         console2.log("MarketEngineDispatcher implementation", Upgrades.getImplementationAddress(proxy));
         console2.log("Admin", p.admin);
         console2.log("Treasury", p.treasury);
         console2.log("Worker", p.worker);
+        emit DeploymentCompleted(proxy, address(adapter));
 
         vm.stopBroadcast();
     }

@@ -9,7 +9,19 @@ import {MarketEngineCoreLifecycleModule} from "../../src/engine/modules/MarketEn
 import {MarketEngineRollingLifecycleModule} from "../../src/engine/modules/MarketEngineRollingLifecycleModule.sol";
 
 contract DeployModulesModular is Script {
+    event ModulesDeployed(
+        address indexed adminModule,
+        address indexed viewModule,
+        address userOpsClaimsModule,
+        address coreLifecycleModule,
+        address rollingLifecycleModule
+    );
+
     function run() external {
+        uint256 expectedChainId = vm.envUint("EXPECTED_CHAIN_ID");
+        require(expectedChainId != 0, "EXPECTED_CHAIN_ID=0");
+        require(block.chainid == expectedChainId, "wrong chain");
+
         vm.startBroadcast();
         address adminModule = address(new MarketEngineAdminModule());
         address viewModule = address(new MarketEngineViewModule());
@@ -22,5 +34,6 @@ contract DeployModulesModular is Script {
         console2.log("MODULE_USEROPS_CLAIMS", userOpsClaimsModule);
         console2.log("MODULE_CORE_LIFECYCLE", coreLifecycleModule);
         console2.log("MODULE_ROLLING_LIFECYCLE", rollingLifecycleModule);
+        emit ModulesDeployed(adminModule, viewModule, userOpsClaimsModule, coreLifecycleModule, rollingLifecycleModule);
     }
 }
