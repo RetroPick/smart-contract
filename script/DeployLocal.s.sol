@@ -44,32 +44,34 @@ contract DeployLocal is Script {
         bytes memory initData = abi.encodeCall(MarketEngineDispatcher.initialize, (initConfig));
         address proxy = UnsafeUpgrades.deployUUPSProxy(address(impl), initData);
         MarketEngineDispatcher dispatcher = MarketEngineDispatcher(payable(proxy));
-        address adminModule = address(new MarketEngineAdminModule());
-        address viewModule = address(new MarketEngineViewModule());
-        address userOpsClaimsModule = address(new MarketEngineUserOpsClaimsModule());
-        address coreLifecycleModule = address(new MarketEngineCoreLifecycleModule());
-        address rollingLifecycleModule = address(new MarketEngineRollingLifecycleModule());
-        ScriptSelectorMatrix.wireAll(
-            dispatcher,
-            ScriptSelectorMatrix.Modules({
-                admin: adminModule,
-                viewModule: viewModule,
-                userOpsClaims: userOpsClaimsModule,
-                coreLifecycle: coreLifecycleModule,
-                rollingLifecycle: rollingLifecycleModule
-            })
-        );
+        _deployAndWireModules(dispatcher);
 
         TrustedReporterAdapter troAdapter = new TrustedReporterAdapter(admin, admin, 3600);
-        console2.log("TrustedReporterAdapter", address(troAdapter));
-
-        console2.log("MockERC20", address(token));
-        console2.log("MockPriceOracle", address(oracle));
-        console2.log("MarketEngineDispatcher proxy", proxy);
-        console2.log("MarketEngineDispatcher implementation", address(impl));
+        _logDeployment(address(troAdapter), p.stakeToken, p.priceOracle, proxy, address(impl));
         emit DeploymentCompleted(proxy, address(impl));
 
         vm.stopBroadcast();
+    }
+
+    function _deployAndWireModules(MarketEngineDispatcher dispatcher) internal {
+        ScriptSelectorMatrix.wireAll(
+            dispatcher,
+            ScriptSelectorMatrix.Modules({
+                admin: address(new MarketEngineAdminModule()),
+                viewModule: address(new MarketEngineViewModule()),
+                userOpsClaims: address(new MarketEngineUserOpsClaimsModule()),
+                coreLifecycle: address(new MarketEngineCoreLifecycleModule()),
+                rollingLifecycle: address(new MarketEngineRollingLifecycleModule())
+            })
+        );
+    }
+
+    function _logDeployment(address tro, address token, address oracle, address proxy, address implementation) internal view {
+        console2.log("TrustedReporterAdapter", tro);
+        console2.log("MockERC20", token);
+        console2.log("MockPriceOracle", oracle);
+        console2.log("MarketEngineDispatcher proxy", proxy);
+        console2.log("MarketEngineDispatcher implementation", implementation);
     }
 
     function _buildInitConfig(DeployInitParams memory p) internal pure returns (IMarketEngine.InitConfig memory cfg) {

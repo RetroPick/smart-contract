@@ -9,7 +9,7 @@ import {UpgradeTestnet} from "../../script/test/UpgradeTestnet.s.sol";
 
 contract DeploymentScriptGuardsTest is Test {
     function test_deployProduction_revertsOnWrongChain() external {
-        vm.setEnv("EXPECTED_CHAIN_ID", "1");
+        vm.setEnv("EXPECTED_CHAIN_ID", vm.toString(block.chainid + 1));
 
         DeployProduction script = new DeployProduction();
         vm.expectRevert("wrong chain");
@@ -17,7 +17,7 @@ contract DeploymentScriptGuardsTest is Test {
     }
 
     function test_deployTestnet_revertsOnWrongChain() external {
-        vm.setEnv("EXPECTED_CHAIN_ID", "1");
+        vm.setEnv("EXPECTED_CHAIN_ID", vm.toString(block.chainid + 1));
 
         DeployTestnet script = new DeployTestnet();
         vm.expectRevert("wrong chain");
@@ -45,7 +45,7 @@ contract DeploymentScriptGuardsTest is Test {
     }
 
     function test_upgradeProduction_revertsOnWrongChain() external {
-        vm.setEnv("EXPECTED_CHAIN_ID", "1");
+        vm.setEnv("EXPECTED_CHAIN_ID", vm.toString(block.chainid + 1));
 
         UpgradeProduction script = new UpgradeProduction();
         vm.expectRevert("wrong chain");
@@ -53,7 +53,7 @@ contract DeploymentScriptGuardsTest is Test {
     }
 
     function test_upgradeTestnet_revertsOnWrongChain() external {
-        vm.setEnv("EXPECTED_CHAIN_ID", "1");
+        vm.setEnv("EXPECTED_CHAIN_ID", vm.toString(block.chainid + 1));
 
         UpgradeTestnet script = new UpgradeTestnet();
         vm.expectRevert("wrong chain");

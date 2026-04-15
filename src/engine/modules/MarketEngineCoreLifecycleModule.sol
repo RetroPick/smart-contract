@@ -5,6 +5,7 @@ import {MarketEngineState} from "../MarketEngineState.sol";
 import {MarketTypes} from "../../types/MarketTypes.sol";
 import {MarketMath} from "../../math/MarketMath.sol";
 import {Resolvers} from "../../logic/Resolvers.sol";
+import {SettlementLogic} from "../../logic/SettlementLogic.sol";
 import {IEventOracle} from "../../interfaces/IEventOracle.sol";
 import {IPriceOracleWithRoundId} from "../../interfaces/IPriceOracleWithRoundId.sol";
 import {IYieldRouterV2} from "../../interfaces/IYieldRouterV2.sol";
@@ -16,11 +17,11 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
     using MarketTypes for MarketTypes.Epoch;
     using MarketMath for MarketTypes.Ledger;
 
-    struct SettlementOutputs {
-        bool refundMode;
-        uint256 winningMask;
-        uint256 claimLiabilityTotal;
-        uint256 settlementFeeTotal;
+    struct ResolveData {
+        int256 priceE8;
+        uint64 publishTime;
+        uint256 confidenceE8;
+        uint80 oracleRoundId;
     }
 
     struct UpsertTemplateParams {
@@ -344,45 +345,77 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
 
         uint64 maxDelay = MarketTypes.effectiveOracleMaxDelaySeconds(e, oracleConfig.maxDelaySeconds);
         uint16 maxConf = MarketTypes.effectiveOracleMaxConfidenceBps(e, oracleConfig.maxConfidenceBps);
-        int256 priceE8;
-        uint64 publishTime;
-        uint256 confidenceE8;
-        uint80 oracleRoundId;
+        ResolveData memory rd = ResolveData({priceE8: 0, publishTime: 0, confidenceE8: 0, oracleRoundId: 0});
         if (e.templateOracleKind == MarketTypes.OracleKind.TrustedReporter) {
-            (priceE8, publishTime, confidenceE8, oracleRoundId) = _readEventOracleForResolve(templateId, epochId, e);
-            if (e.marketType == MarketTypes.MarketType.Corridor || e.marketType == MarketTypes.MarketType.Cascade) {
-                (int256 highE8, int256 lowE8,, uint64 observedAt, bool written) =
-                    IEventOracle(e.eventOracle).getOhlcResult(positionKey(templateId, epochId));
-                if (!written) revert InvalidOracleFeed();
-                e.epochHighE8 = highE8;
-                e.epochLowE8 = lowE8;
-                e.ohlcWritten = true;
-                publishTime = observedAt;
+            {
+                (rd.priceE8, rd.publishTime, rd.confidenceE8, rd.oracleRoundId) =
+                    _readEventOracleForResolve(templateId, epochId, e);
+                rd.publishTime = _applyTrustedReporterOhlcIfNeeded(templateId, epochId, e, rd.publishTime);
             }
         } else {
-            (priceE8, publishTime, confidenceE8, oracleRoundId) =
-                _readOracleOrRevert(templateId, e.oracleClass, e.oracleFeedId, maxDelay, nowTs);
-            if (e.marketType == MarketTypes.MarketType.Convergence) {
-                (int256 p2, uint64 t2, uint256 c2,) =
-                    _readOracleOrRevert(templateId, e.oracleClass, e.oracleFeedIdB, maxDelay, nowTs);
-                _enforceConfidence(p2, c2, maxConf);
-                e.checkpointB_B =
-                    MarketTypes.OracleCheckpoint({valueE8: p2, publishTime: t2, confidenceE8: _toConf128(c2), written: true});
-            } else if (e.marketType == MarketTypes.MarketType.Composite) {
-                for (uint256 i = 0; i < e.compositeFeedCount; i++) {
-                    (int256 pI, uint64 tI, uint256 cI,) =
-                        _readOracleOrRevert(templateId, e.oracleClass, e.compositeFeedIds[i], maxDelay, nowTs);
-                    _enforceConfidence(pI, cI, maxConf);
-                    e.compositeCheckpointsB[i] = MarketTypes.OracleCheckpoint({
-                        valueE8: pI, publishTime: tI, confidenceE8: _toConf128(cI), written: true
-                    });
+            {
+                (rd.priceE8, rd.publishTime, rd.confidenceE8, rd.oracleRoundId) =
+                    _readOracleOrRevert(templateId, e.oracleClass, e.oracleFeedId, maxDelay, nowTs);
+                if (e.marketType == MarketTypes.MarketType.Convergence) {
+                    _resolveConvergenceCheckpointB(templateId, e, maxDelay, maxConf, nowTs);
+                } else if (e.marketType == MarketTypes.MarketType.Composite) {
+                    _resolveCompositeCheckpointB(templateId, e, maxDelay, maxConf, nowTs);
                 }
             }
         }
-        _enforceConfidence(priceE8, confidenceE8, maxConf);
+        _enforceConfidence(rd.priceE8, rd.confidenceE8, maxConf);
         _finishResolveEpochManual(
-            templateId, epochId, priceE8, publishTime, confidenceE8, oracleRoundId, maxDelay, nowTs
+            templateId, epochId, rd.priceE8, rd.publishTime, rd.confidenceE8, rd.oracleRoundId, maxDelay, nowTs
         );
+    }
+
+    function _applyTrustedReporterOhlcIfNeeded(
+        bytes32 templateId,
+        uint64 epochId,
+        MarketTypes.Epoch storage e,
+        uint64 publishTime
+    ) internal returns (uint64) {
+        if (e.marketType != MarketTypes.MarketType.Corridor && e.marketType != MarketTypes.MarketType.Cascade) {
+            return publishTime;
+        }
+
+        (int256 highE8, int256 lowE8, int256 _openE8, uint64 observedAt, bool written) =
+            IEventOracle(e.eventOracle).getOhlcResult(positionKey(templateId, epochId));
+        if (!written) revert InvalidOracleFeed();
+
+        e.epochHighE8 = highE8;
+        e.epochLowE8 = lowE8;
+        e.ohlcWritten = true;
+        return observedAt;
+    }
+
+    function _resolveConvergenceCheckpointB(
+        bytes32 templateId,
+        MarketTypes.Epoch storage e,
+        uint64 maxDelay,
+        uint16 maxConf,
+        uint64 nowTs
+    ) internal {
+        (int256 p2, uint64 t2, uint256 c2,) = _readOracleOrRevert(templateId, e.oracleClass, e.oracleFeedIdB, maxDelay, nowTs);
+        _enforceConfidence(p2, c2, maxConf);
+        e.checkpointB_B =
+            MarketTypes.OracleCheckpoint({valueE8: p2, publishTime: t2, confidenceE8: _toConf128(c2), written: true});
+    }
+
+    function _resolveCompositeCheckpointB(
+        bytes32 templateId,
+        MarketTypes.Epoch storage e,
+        uint64 maxDelay,
+        uint16 maxConf,
+        uint64 nowTs
+    ) internal {
+        for (uint256 i = 0; i < e.compositeFeedCount; i++) {
+            (int256 pI, uint64 tI, uint256 cI,) =
+                _readOracleOrRevert(templateId, e.oracleClass, e.compositeFeedIds[i], maxDelay, nowTs);
+            _enforceConfidence(pI, cI, maxConf);
+            e.compositeCheckpointsB[i] =
+                MarketTypes.OracleCheckpoint({valueE8: pI, publishTime: tI, confidenceE8: _toConf128(cI), written: true});
+        }
     }
 
     // slither-disable-next-line reentrancy-no-eth -- only reachable from `resolveEpoch*` (`nonReentrant`); trusted `yieldRouter`.
@@ -410,7 +443,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         uint256 grossYield = _withdrawRoutedPrincipalOnResolve(templateId, epochId, e.totalPool);
         (uint256 yieldFee, uint256 netYield) = _applyGrossYield(templateId, ledger, grossYield);
 
-        SettlementOutputs memory outputs = _computeSettlementOutputsWithEffectivePool(e, netYield);
+        SettlementLogic.Outputs memory outputs = SettlementLogic.compute(e, netYield);
         _applyResolveAccounting(templateId, epochId, ledger, e, outputs, nowTs);
         _emitResolveEvents(templateId, epochId, outputs, oracleRoundId);
         _finalizeYieldAccounting(templateId, epochId, ledger, grossYield, yieldFee, netYield, outputs.refundMode);
@@ -452,10 +485,10 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         returns (uint256 grossYield)
     {
         IYieldRouterV2 r = yieldRouter;
-        if (address(r) == address(0) || totalPool == 0) return 0;
+        if (address(r) == address(0) || totalPool < 1) return 0;
 
         uint256 routedPrincipal = (totalPool * uint256(10_000 - YIELD_BUFFER_BPS)) / 10_000;
-        if (routedPrincipal == 0) return 0;
+        if (routedPrincipal < 1) return 0;
 
         try r.withdrawScaled(templateId, routedPrincipal) returns (uint256 grossReturned) {
             if (grossReturned > routedPrincipal) return grossReturned - routedPrincipal;
@@ -470,7 +503,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         internal
         returns (uint256 yieldFee, uint256 netYield)
     {
-        if (grossYield == 0) return (0, 0);
+        if (grossYield < 1) return (0, 0);
 
         _vaults[templateId].active += grossYield;
         ledger.increaseActiveCollateral(grossYield);
@@ -493,7 +526,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         uint256 netYield,
         bool refundMode
     ) internal {
-        if (grossYield == 0) return;
+        if (grossYield < 1) return;
 
         if (refundMode) {
             _vaults[templateId].active -= netYield;
@@ -502,165 +535,6 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
             netYield = 0;
         }
         emit EpochYieldAccrued(templateId, epochId, grossYield, yieldFee, netYield);
-    }
-
-    function _applyResolveAccounting(
-        bytes32 templateId,
-        uint64 epochId,
-        MarketTypes.Ledger storage ledger,
-        MarketTypes.Epoch storage e,
-        SettlementOutputs memory outputs,
-        uint64 nowTs
-    ) internal {
-        if (outputs.claimLiabilityTotal > 0) {
-            _vaults[templateId].active -= outputs.claimLiabilityTotal;
-            _vaults[templateId].claims += outputs.claimLiabilityTotal;
-            MarketMath.reserveClaimsFromActive(ledger, outputs.claimLiabilityTotal);
-        }
-        if (outputs.settlementFeeTotal > 0) {
-            _vaults[templateId].active -= outputs.settlementFeeTotal;
-            _vaults[templateId].fees += outputs.settlementFeeTotal;
-            MarketMath.reserveFeesFromActive(ledger, outputs.settlementFeeTotal);
-        }
-        e.winningOutcomeMask = outputs.winningMask;
-        e.claimLiabilityTotal = outputs.refundMode ? 0 : outputs.claimLiabilityTotal;
-        e.totalRefundLiability = outputs.refundMode ? outputs.claimLiabilityTotal : 0;
-        e.settlementFeeTotal = outputs.settlementFeeTotal;
-        e.refundMode = outputs.refundMode;
-        e.claimable = true;
-        e.status = outputs.refundMode ? MarketTypes.EpochStatus.Voided : MarketTypes.EpochStatus.Resolved;
-        e.resolvedAt = nowTs;
-        ledger.lastResolvedEpochId = epochId;
-        _setRemainingWinningStake(templateId, epochId, outputs.refundMode);
-    }
-
-    function _emitResolveEvents(
-        bytes32 templateId,
-        uint64 epochId,
-        SettlementOutputs memory outputs,
-        uint80 oracleRoundId
-    ) internal {
-        MarketTypes.Epoch storage e = _epochs[templateId][epochId];
-        emit EpochResolved(
-            templateId,
-            epochId,
-            outputs.winningMask,
-            outputs.claimLiabilityTotal,
-            outputs.settlementFeeTotal,
-            outputs.refundMode
-        );
-        emit EpochResolvedV2(templateId, epochId, oracleRoundId, e.checkpointB.valueE8, e.checkpointB.publishTime);
-    }
-
-    function _setRemainingWinningStake(bytes32 templateId, uint64 epochId, bool refundMode) internal {
-        MarketTypes.Epoch storage e = _epochs[templateId][epochId];
-        if (refundMode) {
-            e.remainingWinningStake = 0;
-            return;
-        }
-        uint256 sum = 0;
-        uint8 n = e.outcomeCount;
-        for (uint256 i = 0; i < uint256(n); i++) {
-            if (((e.winningOutcomeMask >> i) & 1) == 1) sum += e.outcomePools[i];
-        }
-        e.remainingWinningStake = sum;
-    }
-
-    function _computeSettlementOutputsWithEffectivePool(MarketTypes.Epoch storage e, uint256 netYield)
-        internal
-        returns (SettlementOutputs memory outputs)
-    {
-        if (e.marketType == MarketTypes.MarketType.Direction) {
-            (bool voided, uint256 mask) = Resolvers.resolveDirection(e.checkpointA, e.checkpointB, e.equalPriceVoids);
-            if (voided) {
-                outputs.refundMode = true;
-                outputs.winningMask = 0;
-                outputs.claimLiabilityTotal = e.totalPool;
-                outputs.settlementFeeTotal = 0;
-                return outputs;
-            }
-            outputs.refundMode = false;
-            outputs.winningMask = mask;
-            e.winningOutcomeMask = mask;
-        } else if (e.marketType == MarketTypes.MarketType.Threshold) {
-            outputs.refundMode = false;
-            int256 effectiveThreshold = e.absoluteThresholdValueE8;
-            if (e.anchorPriceE8 != 0) {
-                effectiveThreshold = e.anchorPriceE8;
-            }
-            outputs.winningMask = Resolvers.resolveThreshold(e.condition, effectiveThreshold, e.checkpointB);
-            e.winningOutcomeMask = outputs.winningMask;
-        } else if (e.marketType == MarketTypes.MarketType.RangeClose) {
-            outputs.refundMode = false;
-            outputs.winningMask = Resolvers.resolveRangeClose(e.checkpointB, e.outcomeCount, e.rangeBoundsE8);
-            e.winningOutcomeMask = outputs.winningMask;
-        } else if (e.marketType == MarketTypes.MarketType.Velocity) {
-            outputs.refundMode = false;
-            outputs.winningMask = Resolvers.resolveVelocity(e.checkpointA, e.checkpointB, e.outcomeCount, e.velocityBoundsE4);
-            e.winningOutcomeMask = outputs.winningMask;
-        } else if (e.marketType == MarketTypes.MarketType.Ladder) {
-            outputs.refundMode = false;
-            outputs.winningMask = Resolvers.resolveLadder(e.checkpointB, e.outcomeCount, e.ladderBoundsE8);
-            e.winningOutcomeMask = outputs.winningMask;
-        } else if (e.marketType == MarketTypes.MarketType.Convergence) {
-            (bool voidedCv, uint256 maskCv) =
-                Resolvers.resolveConvergence(e.checkpointA, e.checkpointA_B, e.checkpointB, e.checkpointB_B, e.spreadToleranceBps);
-            if (voidedCv) {
-                outputs.refundMode = true;
-                outputs.winningMask = 0;
-                outputs.claimLiabilityTotal = e.totalPool;
-                outputs.settlementFeeTotal = 0;
-                return outputs;
-            }
-            outputs.refundMode = false;
-            outputs.winningMask = maskCv;
-            e.winningOutcomeMask = maskCv;
-        } else if (e.marketType == MarketTypes.MarketType.Composite) {
-            int256[4] memory thresholds;
-            for (uint256 i = 0; i < e.compositeFeedCount; i++) {
-                thresholds[i] = e.absoluteThresholdValueE8;
-            }
-            outputs.refundMode = false;
-            outputs.winningMask = Resolvers.resolveComposite(
-                e.compositeLogic, e.compositeFeedCount, e.compositeConditions, thresholds, e.compositeCheckpointsB
-            );
-            e.winningOutcomeMask = outputs.winningMask;
-        } else if (e.marketType == MarketTypes.MarketType.Corridor) {
-            outputs.refundMode = false;
-            outputs.winningMask =
-                Resolvers.resolveCorridor(e.epochHighE8, e.epochLowE8, e.rangeBoundsE8[1], e.rangeBoundsE8[0]);
-            e.winningOutcomeMask = outputs.winningMask;
-        } else {
-            outputs.refundMode = false;
-            outputs.winningMask =
-                Resolvers.resolveCascade(
-                    e.epochHighE8, e.epochLowE8, e.outcomeCount, e.rangeBoundsE8, e.cascadeDownward
-                );
-            e.winningOutcomeMask = outputs.winningMask;
-        }
-        uint256 effectiveTotalPool = e.totalPool + netYield;
-        uint256 winningPool = 0;
-        for (uint256 i = 0; i < e.outcomeCount; i++) {
-            if (((outputs.winningMask >> i) & 1) == 1) winningPool += e.outcomePools[i];
-        }
-        // slither-disable-next-line unused-return -- third return is `distributableLosingPool`; only claim + fee used here.
-        if (e.marketType == MarketTypes.MarketType.Ladder) {
-            uint8 winnerIdx = 0;
-            for (uint8 i = 0; i < e.outcomeCount; i++) {
-                if (((outputs.winningMask >> i) & 1) == 1) {
-                    winnerIdx = i;
-                    break;
-                }
-            }
-            uint16 winnerWeight = e.ladderPayoutWeightsBps[winnerIdx];
-            (outputs.claimLiabilityTotal, outputs.settlementFeeTotal,) = MarketMath.computeLadderLiabilityComponents(
-                effectiveTotalPool, winningPool, e.settlementFeeBps, e.feeOnLosingPool, winnerWeight
-            );
-        } else {
-            (outputs.claimLiabilityTotal, outputs.settlementFeeTotal,) = MarketMath.computeClaimLiabilityComponents(
-                effectiveTotalPool, winningPool, e.settlementFeeBps, e.feeOnLosingPool
-            );
-        }
     }
 
     function _requireCanOpenNextEpoch(MarketTypes.Ledger storage ledger, uint64 epochId) internal view {

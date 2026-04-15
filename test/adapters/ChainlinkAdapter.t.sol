@@ -18,6 +18,7 @@ contract ChainlinkAdapterTest is Test {
         feed = new MockAggregatorV3(8, int256(45_000 * 1e8));
         adapter = new ChainlinkAdapter(address(seq));
         feedId = bytes32(uint256(uint160(address(feed))));
+        adapter.setFeedDecimals(feedId, 8);
     }
 
     function test_happy_path_e8() public view {
@@ -30,13 +31,14 @@ contract ChainlinkAdapterTest is Test {
         MockAggregatorV3 f = new MockAggregatorV3(8, 100e8);
         bytes32 id = bytes32(uint256(uint160(address(f))));
         ChainlinkAdapter l1 = new ChainlinkAdapter(address(0));
-        (int256 p,,) = l1.getNormalizedPrice(id, 86_400, 0);
+        l1.setFeedDecimals(id, 8);
+        (int256 p,,) = l1.getNormalizedPrice(id, 86_400, uint64(block.timestamp));
         assertEq(p, 100e8);
     }
 
     function test_revert_zero_feed_address() public {
         vm.expectRevert(ChainlinkAdapter.InvalidFeedAddress.selector);
-        adapter.getNormalizedPrice(bytes32(0), 86_400, 0);
+        adapter.getNormalizedPrice(bytes32(0), 86_400, uint64(block.timestamp));
     }
 
     function test_revert_stale() public {
@@ -55,7 +57,7 @@ contract ChainlinkAdapterTest is Test {
     function test_revert_sequencer_down() public {
         seq.setDown();
         vm.expectRevert(ChainlinkAdapter.SequencerDown.selector);
-        adapter.getNormalizedPrice(feedId, 86_400, 0);
+        adapter.getNormalizedPrice(feedId, 86_400, uint64(block.timestamp));
     }
 
     function test_revert_sequencer_grace_period() public {
@@ -64,38 +66,40 @@ contract ChainlinkAdapterTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(ChainlinkAdapter.SequencerInGracePeriod.selector, started, started + 3600)
         );
-        adapter.getNormalizedPrice(feedId, 86_400, 0);
+        adapter.getNormalizedPrice(feedId, 86_400, uint64(block.timestamp));
     }
 
     function test_revert_sequencer_zero_started_at_while_up() public {
         seq.setUpWithZeroStartedAt();
         vm.expectRevert(ChainlinkAdapter.InvalidSequencerRoundData.selector);
-        adapter.getNormalizedPrice(feedId, 86_400, 0);
+        adapter.getNormalizedPrice(feedId, 86_400, uint64(block.timestamp));
     }
 
     function test_revert_incomplete_round() public {
         feed.makeIncompleteRound();
         vm.expectRevert(abi.encodeWithSelector(ChainlinkAdapter.RoundNotComplete.selector, uint80(2), uint80(1)));
-        adapter.getNormalizedPrice(feedId, 86_400, 0);
+        adapter.getNormalizedPrice(feedId, 86_400, uint64(block.timestamp));
     }
 
     function test_revert_zero_price() public {
         feed.setAnswer(0);
         vm.expectRevert(ChainlinkAdapter.InvalidPrice.selector);
-        adapter.getNormalizedPrice(feedId, 86_400, 0);
+        adapter.getNormalizedPrice(feedId, 86_400, uint64(block.timestamp));
     }
 
     function test_normalize_18_decimals() public {
         MockAggregatorV3 f18 = new MockAggregatorV3(18, int256(1e18));
         bytes32 id18 = bytes32(uint256(uint160(address(f18))));
-        (int256 price,,) = adapter.getNormalizedPrice(id18, 86_400, 0);
+        adapter.setFeedDecimals(id18, 18);
+        (int256 price,,) = adapter.getNormalizedPrice(id18, 86_400, uint64(block.timestamp));
         assertEq(price, 1e8);
     }
 
     function test_normalize_decimals_below_8_scales_up() public {
         MockAggregatorV3 f6 = new MockAggregatorV3(6, int256(123_456_789));
         bytes32 id6 = bytes32(uint256(uint160(address(f6))));
-        (int256 price,,) = adapter.getNormalizedPrice(id6, 86_400, 0);
+        adapter.setFeedDecimals(id6, 6);
+        (int256 price,,) = adapter.getNormalizedPrice(id6, 86_400, uint64(block.timestamp));
         assertEq(price, int256(12_345_678_900));
     }
 
@@ -103,7 +107,14 @@ contract ChainlinkAdapterTest is Test {
         MockAggregatorV3 f19 = new MockAggregatorV3(19, int256(1e19));
         bytes32 id19 = bytes32(uint256(uint160(address(f19))));
         vm.expectRevert(abi.encodeWithSelector(ChainlinkAdapter.UnsupportedFeedDecimals.selector, uint8(19)));
-        adapter.getNormalizedPrice(id19, 86_400, 0);
+        adapter.setFeedDecimals(id19, 19);
+    }
+
+    function test_revert_unconfigured_feed_decimals() public {
+        MockAggregatorV3 f = new MockAggregatorV3(8, int256(123e8));
+        bytes32 id = bytes32(uint256(uint160(address(f))));
+        vm.expectRevert(abi.encodeWithSelector(ChainlinkAdapter.FeedDecimalsNotConfigured.selector, id));
+        adapter.getNormalizedPrice(id, 86_400, uint64(block.timestamp));
     }
 
     function test_feedId_round_trip() public view {

@@ -62,4 +62,58 @@ library ScriptSelectorMatrix {
         dispatcher.setSelectorModule(IMarketEngine.cancelRollingEpochWhileHalted.selector, m.rollingLifecycle, false);
         dispatcher.setSelectorModule(IMarketEngine.resetRollingLifecycle.selector, m.rollingLifecycle, false);
     }
+
+    /// @notice Every selector registered in `wireAll` — use in tests to detect wiring drift.
+    function delegatedSelectors() internal pure returns (bytes4[] memory s) {
+        s = new bytes4[](38);
+        uint256 i;
+        s[i++] = IMarketEngine.pauseProgram.selector;
+        s[i++] = IMarketEngine.setTreasury.selector;
+        s[i++] = IMarketEngine.setWorkerAuthority.selector;
+        s[i++] = IMarketEngine.setDepositExecutor.selector;
+        s[i++] = IMarketEngine.setYieldRouter.selector;
+        s[i++] = IMarketEngine.setRateOracle.selector;
+        s[i++] = IMarketEngine.setSmartDataOracle.selector;
+        s[i++] = IMarketEngine.setMacroOracle.selector;
+        s[i++] = IMarketEngine.setEquityOracle.selector;
+        s[i++] = IMarketEngine.setLmRewardsEnabled.selector;
+        s[i++] = IMarketEngine.keeperClaimLmRewards.selector;
+        s[i++] = IMarketEngine.yieldEmergencyWithdraw.selector;
+        s[i++] = IMarketEngine.initializeMarket.selector;
+        s[i++] = IMarketEngine.withdrawFees.selector;
+        s[i++] = IMarketEngine.getUserEpochs.selector;
+        s[i++] = IMarketEngine.getVaultBalances.selector;
+        s[i++] = IMarketEngine.getRollingLifecycle.selector;
+        s[i++] = IMarketEngine.getEpoch.selector;
+        s[i++] = IMarketEngine.depositToSide.selector;
+        s[i++] = IMarketEngine.depositToSideFor.selector;
+        s[i++] = IMarketEngine.switchSide.selector;
+        s[i++] = IMarketEngine.claim.selector;
+        s[i++] = IMarketEngine.claimMany.selector;
+        s[i++] = IMarketEngine.upsertTemplate.selector;
+        s[i++] = IMarketEngine.openEpoch.selector;
+        s[i++] = IMarketEngine.openEpochsBatch.selector;
+        s[i++] = IMarketEngine.lockEpoch.selector;
+        s[i++] = IMarketEngine.lockEpochsBatch.selector;
+        s[i++] = IMarketEngine.resolveEpoch.selector;
+        s[i++] = IMarketEngine.resolveEpochsBatch.selector;
+        s[i++] = IMarketEngine.cancelEpoch.selector;
+        s[i++] = IMarketEngine.genesisStartRolling.selector;
+        s[i++] = IMarketEngine.genesisLockRolling.selector;
+        s[i++] = IMarketEngine.executeRollingRound.selector;
+        s[i++] = IMarketEngine.executeRollingRoundBatch.selector;
+        s[i++] = IMarketEngine.haltRollingMarket.selector;
+        s[i++] = IMarketEngine.cancelRollingEpochWhileHalted.selector;
+        s[i++] = IMarketEngine.resetRollingLifecycle.selector;
+        require(i == 38, "delegatedSelectors length");
+    }
+
+    /// @dev Reverts with `selector not wired` if any delegated selector maps to `address(0)`.
+    function requireAllDelegatedSelectorsWired(MarketEngineDispatcher dispatcher) internal view {
+        bytes4[] memory sel = delegatedSelectors();
+        for (uint256 k = 0; k < sel.length; k++) {
+            (address m,) = dispatcher.getSelectorModule(sel[k]);
+            require(m != address(0), "selector not wired");
+        }
+    }
 }

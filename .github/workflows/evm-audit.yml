@@ -1,0 +1,42 @@
+name: RetroPick EVM Security Audit
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    paths:
+      - 'evm/**' # Only trigger if EVM contracts are modified
+
+jobs:
+  security-checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./evm # Targets your specific EVM directory
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Run Foundry Tests & Invariants
+        run: forge test -vvv
+
+      - name: Run Aderyn Static Analysis
+        uses: cyfrin/aderyn-action@v1.0.1
+        with:
+          working_directory: ./evm
+          fail_on_high: true # Automatically fail the PR if high severities are found
+
+      - name: Install Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Run Slither
+        uses: crytic/slither-action@v0.3.1
+        with:
+          target: './evm'
+          slither-args: '--exclude-dependencies' # Keeps the output focused on your core modules

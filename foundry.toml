@@ -6,13 +6,10 @@ solc_version = "0.8.24"
 evm_version = "cancun"
 optimizer = true
 optimizer_runs = 200
-via_ir = true
+via_ir = false
 bytecode_hash = "none"
 cbor_metadata = false
 ffi = true
-ast = true
-build_info = true
-extra_output = ["storageLayout"]
 fs_permissions = [{ access = "read", path = "out" }]
 remappings = [
   "@openzeppelin/contracts/=lib/openzeppelin-contracts-upgradeable/lib/openzeppelin-contracts/contracts/",
@@ -26,6 +23,14 @@ remappings = [
 # Use: `FOUNDRY_PROFILE=production forge build` — overrides only listed keys vs `[profile.default]`.
 [profile.production]
 optimizer_runs = 1_000_000
+via_ir = true
+
+# Profile for OZ upgrades validation and storage-layout introspection.
+[profile.upgrades]
+via_ir = true
+ast = true
+build_info = true
+extra_output = ["storageLayout"]
 
 [profile.deploybudget]
 optimizer_runs = 1

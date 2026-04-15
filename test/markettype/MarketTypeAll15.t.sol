@@ -507,11 +507,19 @@ contract MarketTypeAll15Test is MarketEngineBase {
         bytes32 marketId = engine.positionKey(templateId, epochId);
         bytes32 ds = keccak256("markettype-e2e");
         uint64 observedAt = uint64(block.timestamp);
+        _postTroResolve(marketId, closeE8, observedAt, ds);
+        _postTroOhlc(marketId, highE8, lowE8, closeE8, observedAt, ds);
+    }
 
+    function _postTroResolve(bytes32 marketId, int256 closeE8, uint64 observedAt, bytes32 ds) internal {
         bytes32 resolveDigest = tro.hashResolveClaim(marketId, closeE8, observedAt, ds);
         (uint8 rv, bytes32 rr, bytes32 rs) = vm.sign(TRO_PK, resolveDigest);
         tro.postResolveResult(marketId, closeE8, observedAt, ds, abi.encodePacked(rr, rs, rv));
+    }
 
+    function _postTroOhlc(bytes32 marketId, int256 highE8, int256 lowE8, int256 closeE8, uint64 observedAt, bytes32 ds)
+        internal
+    {
         bytes32 ohlcDigest = _hashOhlcClaim(marketId, highE8, lowE8, closeE8, observedAt, ds);
         (uint8 ov, bytes32 orr, bytes32 ors) = vm.sign(TRO_PK, ohlcDigest);
         tro.postOhlcResult(marketId, highE8, lowE8, closeE8, observedAt, ds, abi.encodePacked(orr, ors, ov));

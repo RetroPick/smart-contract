@@ -13,6 +13,7 @@ import {UpgradeMarketEngine_YieldRouting} from "../../script/UpgradeMarketEngine
 import {IMarketEngine} from "../../src/engine/IMarketEngine.sol";
 import {MarketEngineDispatcher} from "../../src/engine/MarketEngineDispatcher.sol";
 import {MockERC20} from "../../src/test/MockERC20.sol";
+import {ScriptSelectorMatrix} from "../../script/ScriptSelectorMatrix.sol";
 
 /// forge-config: default.threads = 1
 contract DeploymentScriptExecutionTest is Test {
@@ -49,6 +50,8 @@ contract DeploymentScriptExecutionTest is Test {
         assertTrue(pauseModule != address(0));
         assertTrue(depositModule != address(0));
         assertTrue(rollingModule != address(0));
+
+        ScriptSelectorMatrix.requireAllDelegatedSelectorsWired(dispatcher);
     }
 
     function test_deployTestnet_success_withoutFaucet() external {
@@ -135,6 +138,7 @@ contract DeploymentScriptExecutionTest is Test {
     function test_upgradeYieldRouting_success_withLmToggle() external {
         address proxy = _deployProductionFixture();
         vm.setEnv("PROXY_ADDRESS", vm.toString(proxy));
+        vm.setEnv("EXPECTED_CHAIN_ID", vm.toString(block.chainid));
         vm.setEnv("YIELD_ROUTER", vm.toString(makeAddr("yieldRouter")));
         vm.setEnv("YIELD_FEE_BPS", "100");
         vm.setEnv("LM_REWARDS_ENABLED", "true");

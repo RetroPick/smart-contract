@@ -51,6 +51,18 @@ import {ScriptSelectorMatrix} from "../ScriptSelectorMatrix.sol";
 contract DeployTestnet is Script {
     event DeploymentCompleted(address indexed proxy, address indexed adapter);
 
+    struct EnvConfig {
+        address sequencerFeed;
+        address admin;
+        address treasury;
+        address worker;
+        uint16 defFee;
+        uint16 maxSw;
+        uint8 maxOut;
+        uint64 delay;
+        uint16 conf;
+    }
+
     struct DeployInitParams {
         address stakeToken;
         address adapter;
@@ -71,43 +83,15 @@ contract DeployTestnet is Script {
 
         vm.startBroadcast();
 
-        address sequencerFeed = vm.envAddress("SEQUENCER_FEED");
-        address admin = vm.envAddress("ADMIN");
-        address treasury = vm.envAddress("TREASURY");
-        address worker = vm.envAddress("WORKER");
+        EnvConfig memory c = _loadEnvConfig();
 
-        uint256 defFeeRaw = vm.envUint("DEFAULT_SETTLEMENT_FEE_BPS");
-        uint256 maxSwRaw = vm.envUint("MAX_SWITCH_FEE_BPS");
-        uint256 maxOutRaw = vm.envUint("MAX_OUTCOMES");
-        uint256 delayRaw = vm.envUint("ORACLE_MAX_DELAY_SECONDS");
-        uint256 confRaw = vm.envUint("ORACLE_MAX_CONFIDENCE_BPS");
+        ChainlinkAdapter adapter = new ChainlinkAdapter(c.sequencerFeed);
+        RateAdapter rateAdapter = new RateAdapter(c.sequencerFeed);
+        SmartDataAdapter smartDataAdapter = new SmartDataAdapter(c.sequencerFeed);
+        MacroAdapter macroAdapter = new MacroAdapter(c.sequencerFeed);
+        EquityAdapter equityAdapter = new EquityAdapter(c.sequencerFeed);
 
-        require(admin != address(0), "ADMIN=0");
-        require(treasury != address(0), "TREASURY=0");
-        require(worker != address(0), "WORKER=0");
-
-        require(defFeeRaw <= 10_000, "DEFAULT_SETTLEMENT_FEE_BPS>10000");
-        require(maxSwRaw <= 10_000, "MAX_SWITCH_FEE_BPS>10000");
-        require(maxOutRaw <= 8, "MAX_OUTCOMES>8");
-        require(delayRaw <= type(uint64).max, "ORACLE_MAX_DELAY_SECONDS overflow");
-        require(confRaw <= 10_000, "ORACLE_MAX_CONFIDENCE_BPS>10000");
-
-        // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
-        uint64 delay = uint64(delayRaw);
-
-        ChainlinkAdapter adapter = new ChainlinkAdapter(sequencerFeed);
-        RateAdapter rateAdapter = new RateAdapter(sequencerFeed);
-        SmartDataAdapter smartDataAdapter = new SmartDataAdapter(sequencerFeed);
-        MacroAdapter macroAdapter = new MacroAdapter(sequencerFeed);
-        EquityAdapter equityAdapter = new EquityAdapter(sequencerFeed);
-
-        address trustedReporter = vm.envOr("TRUSTED_REPORTER", address(0));
-        if (trustedReporter != address(0)) {
-            uint256 troMaxAgeRaw = vm.envOr("TRO_MAX_SIGNATURE_AGE_SECONDS", uint256(3600));
-            require(troMaxAgeRaw >= 60 && troMaxAgeRaw <= 48 hours, "TRO_MAX_SIGNATURE_AGE_SECONDS range");
-            TrustedReporterAdapter tro = new TrustedReporterAdapter(trustedReporter, admin, troMaxAgeRaw);
-            console2.log("TrustedReporterAdapter", address(tro));
-        }
+        _deployOptionalTrustedReporter(c.admin);
 
         // Optional: deploy faucet + demo token for testnet UX.
         address stakeToken = vm.envOr("STAKE_TOKEN", address(0));
@@ -139,7 +123,7 @@ contract DeployTestnet is Script {
         // This helps catch: wrong sequencer feed (L2), stale testnet feeds, grace period, etc.
         address smokeFeed = vm.envOr("SMOKE_FEED_ADDRESS", address(0));
         if (smokeFeed != address(0)) {
-            uint64 smokeMaxAge = uint64(vm.envOr("SMOKE_MAX_AGE_SECONDS", uint256(delay)));
+            uint64 smokeMaxAge = uint64(vm.envOr("SMOKE_MAX_AGE_SECONDS", uint256(c.delay)));
             bytes32 feedId = bytes32(uint256(uint160(smokeFeed)));
             (int256 priceE8, uint64 publishTime, uint256 confidenceE8) =
                 adapter.getNormalizedPrice(feedId, smokeMaxAge, uint64(block.timestamp));
@@ -152,18 +136,14 @@ contract DeployTestnet is Script {
         DeployInitParams memory p = DeployInitParams({
             stakeToken: stakeToken,
             adapter: address(adapter),
-            admin: admin,
-            treasury: treasury,
-            worker: worker,
-            // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
-            defFee: uint16(defFeeRaw),
-            // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
-            maxSw: uint16(maxSwRaw),
-            // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
-            maxOut: uint8(maxOutRaw),
-            delay: delay,
-            // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
-            conf: uint16(confRaw)
+            admin: c.admin,
+            treasury: c.treasury,
+            worker: c.worker,
+            defFee: c.defFee,
+            maxSw: c.maxSw,
+            maxOut: c.maxOut,
+            delay: c.delay,
+            conf: c.conf
         });
 
         IMarketEngine.InitConfig memory initConfig = _buildInitConfig(p);
@@ -174,14 +154,7 @@ contract DeployTestnet is Script {
         address proxy =
             Upgrades.deployUUPSProxy("MarketEngineDispatcher.sol:MarketEngineDispatcher", initData, opts);
         MarketEngineDispatcher dispatcher = MarketEngineDispatcher(payable(proxy));
-        address adminModule = address(new MarketEngineAdminModule());
-        address viewModule = address(new MarketEngineViewModule());
-        address userOpsClaimsModule = address(new MarketEngineUserOpsClaimsModule());
-        address coreLifecycleModule = address(new MarketEngineCoreLifecycleModule());
-        address rollingLifecycleModule = address(new MarketEngineRollingLifecycleModule());
-        _wireModules(
-            dispatcher, adminModule, viewModule, userOpsClaimsModule, coreLifecycleModule, rollingLifecycleModule
-        );
+        _deployAndWireModules(dispatcher);
 
         _verifyAndLogDeployment(proxy, p);
         IMarketEngine(proxy).setRateOracle(address(rateAdapter));
@@ -191,6 +164,49 @@ contract DeployTestnet is Script {
         emit DeploymentCompleted(proxy, p.adapter);
 
         vm.stopBroadcast();
+    }
+
+    function _loadEnvConfig() internal view returns (EnvConfig memory c) {
+        c.sequencerFeed = vm.envAddress("SEQUENCER_FEED");
+        c.admin = vm.envAddress("ADMIN");
+        c.treasury = vm.envAddress("TREASURY");
+        c.worker = vm.envAddress("WORKER");
+
+        uint256 defFeeRaw = vm.envUint("DEFAULT_SETTLEMENT_FEE_BPS");
+        uint256 maxSwRaw = vm.envUint("MAX_SWITCH_FEE_BPS");
+        uint256 maxOutRaw = vm.envUint("MAX_OUTCOMES");
+        uint256 delayRaw = vm.envUint("ORACLE_MAX_DELAY_SECONDS");
+        uint256 confRaw = vm.envUint("ORACLE_MAX_CONFIDENCE_BPS");
+
+        require(c.admin != address(0), "ADMIN=0");
+        require(c.treasury != address(0), "TREASURY=0");
+        require(c.worker != address(0), "WORKER=0");
+
+        require(defFeeRaw <= 10_000, "DEFAULT_SETTLEMENT_FEE_BPS>10000");
+        require(maxSwRaw <= 10_000, "MAX_SWITCH_FEE_BPS>10000");
+        require(maxOutRaw <= 8, "MAX_OUTCOMES>8");
+        require(delayRaw <= type(uint64).max, "ORACLE_MAX_DELAY_SECONDS overflow");
+        require(confRaw <= 10_000, "ORACLE_MAX_CONFIDENCE_BPS>10000");
+
+        // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
+        c.defFee = uint16(defFeeRaw);
+        // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
+        c.maxSw = uint16(maxSwRaw);
+        // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
+        c.maxOut = uint8(maxOutRaw);
+        // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
+        c.delay = uint64(delayRaw);
+        // forge-lint: disable-next-line(unsafe-typecast) -- bounded by require(...) checks above
+        c.conf = uint16(confRaw);
+    }
+
+    function _deployOptionalTrustedReporter(address admin) internal {
+        address trustedReporter = vm.envOr("TRUSTED_REPORTER", address(0));
+        if (trustedReporter == address(0)) return;
+        uint256 troMaxAgeRaw = vm.envOr("TRO_MAX_SIGNATURE_AGE_SECONDS", uint256(3600));
+        require(troMaxAgeRaw >= 60 && troMaxAgeRaw <= 48 hours, "TRO_MAX_SIGNATURE_AGE_SECONDS range");
+        TrustedReporterAdapter tro = new TrustedReporterAdapter(trustedReporter, admin, troMaxAgeRaw);
+        console2.log("TrustedReporterAdapter", address(tro));
     }
 
     function _buildInitConfig(DeployInitParams memory p) internal pure returns (IMarketEngine.InitConfig memory cfg) {
@@ -209,22 +225,15 @@ contract DeployTestnet is Script {
         });
     }
 
-    function _wireModules(
-        MarketEngineDispatcher dispatcher,
-        address adminModule,
-        address viewModule,
-        address userOpsClaimsModule,
-        address coreLifecycleModule,
-        address rollingLifecycleModule
-    ) internal {
+    function _deployAndWireModules(MarketEngineDispatcher dispatcher) internal {
         ScriptSelectorMatrix.wireAll(
             dispatcher,
             ScriptSelectorMatrix.Modules({
-                admin: adminModule,
-                viewModule: viewModule,
-                userOpsClaims: userOpsClaimsModule,
-                coreLifecycle: coreLifecycleModule,
-                rollingLifecycle: rollingLifecycleModule
+                admin: address(new MarketEngineAdminModule()),
+                viewModule: address(new MarketEngineViewModule()),
+                userOpsClaims: address(new MarketEngineUserOpsClaimsModule()),
+                coreLifecycle: address(new MarketEngineCoreLifecycleModule()),
+                rollingLifecycle: address(new MarketEngineRollingLifecycleModule())
             })
         );
     }

@@ -5,6 +5,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MarketTypes} from "../types/MarketTypes.sol";
 import {IPriceOracle} from "../interfaces/IPriceOracle.sol";
 import {IYieldRouterV2} from "../interfaces/IYieldRouterV2.sol";
+import {MarketMath} from "../math/MarketMath.sol";
+import {SettlementLogic} from "../logic/SettlementLogic.sol";
 
 /// @notice Canonical MarketEngine storage anchor used by dispatcher/modules.
 /// @dev Keep this layout append-only for upgrade safety.
@@ -226,6 +228,68 @@ abstract contract MarketEngineState {
 
     function _resolveOracle(bytes32 templateId) internal view returns (IPriceOracle) {
         return _resolveOracleByClass(_templates[templateId].oracleClass);
+    }
+
+    function _applyResolveAccounting(
+        bytes32 templateId,
+        uint64 epochId,
+        MarketTypes.Ledger storage ledger,
+        MarketTypes.Epoch storage e,
+        SettlementLogic.Outputs memory outputs,
+        uint64 nowTs
+    ) internal {
+        if (outputs.claimLiabilityTotal > 0) {
+            _vaults[templateId].active -= outputs.claimLiabilityTotal;
+            _vaults[templateId].claims += outputs.claimLiabilityTotal;
+            MarketMath.reserveClaimsFromActive(ledger, outputs.claimLiabilityTotal);
+        }
+        if (outputs.settlementFeeTotal > 0) {
+            _vaults[templateId].active -= outputs.settlementFeeTotal;
+            _vaults[templateId].fees += outputs.settlementFeeTotal;
+            MarketMath.reserveFeesFromActive(ledger, outputs.settlementFeeTotal);
+        }
+        e.winningOutcomeMask = outputs.winningMask;
+        e.claimLiabilityTotal = outputs.refundMode ? 0 : outputs.claimLiabilityTotal;
+        e.totalRefundLiability = outputs.refundMode ? outputs.claimLiabilityTotal : 0;
+        e.settlementFeeTotal = outputs.settlementFeeTotal;
+        e.refundMode = outputs.refundMode;
+        e.claimable = true;
+        e.status = outputs.refundMode ? MarketTypes.EpochStatus.Voided : MarketTypes.EpochStatus.Resolved;
+        e.resolvedAt = nowTs;
+        ledger.lastResolvedEpochId = epochId;
+        _setRemainingWinningStake(templateId, epochId, outputs.refundMode);
+    }
+
+    function _emitResolveEvents(
+        bytes32 templateId,
+        uint64 epochId,
+        SettlementLogic.Outputs memory outputs,
+        uint80 oracleRoundId
+    ) internal {
+        MarketTypes.Epoch storage e = _epochs[templateId][epochId];
+        emit EpochResolved(
+            templateId,
+            epochId,
+            outputs.winningMask,
+            outputs.claimLiabilityTotal,
+            outputs.settlementFeeTotal,
+            outputs.refundMode
+        );
+        emit EpochResolvedV2(templateId, epochId, oracleRoundId, e.checkpointB.valueE8, e.checkpointB.publishTime);
+    }
+
+    function _setRemainingWinningStake(bytes32 templateId, uint64 epochId, bool refundMode) internal {
+        MarketTypes.Epoch storage e = _epochs[templateId][epochId];
+        if (refundMode) {
+            e.remainingWinningStake = 0;
+            return;
+        }
+        uint256 sum = 0;
+        uint8 n = e.outcomeCount;
+        for (uint256 i = 0; i < uint256(n); i++) {
+            if (((e.winningOutcomeMask >> i) & 1) != 0) sum += e.outcomePools[i];
+        }
+        e.remainingWinningStake = sum;
     }
 }
 // slither-disable-end uninitialized-state

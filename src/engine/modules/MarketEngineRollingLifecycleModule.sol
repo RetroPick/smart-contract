@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {MarketEngineState} from "../MarketEngineState.sol";
 import {MarketTypes} from "../../types/MarketTypes.sol";
 import {MarketMath} from "../../math/MarketMath.sol";
-import {Resolvers} from "../../logic/Resolvers.sol";
+import {SettlementLogic} from "../../logic/SettlementLogic.sol";
 import {IPriceOracleWithRoundId} from "../../interfaces/IPriceOracleWithRoundId.sol";
 import {IYieldRouterV2} from "../../interfaces/IYieldRouterV2.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
@@ -20,13 +20,6 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         uint64 publishTime;
         uint256 confidenceE8;
         uint80 oracleRoundId;
-    }
-
-    struct SettlementOutputs {
-        bool refundMode;
-        uint256 winningMask;
-        uint256 claimLiabilityTotal;
-        uint256 settlementFeeTotal;
     }
 
     function genesisStartRolling(bytes32 templateId) external {
@@ -70,7 +63,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
 
         if (MarketTypes.requiresCheckpointAOnLock(e1)) {
             bool lockApplied =
-                _applyGenesisLockWithOracle(templateId, k, e1, ledger, e1.oracleClass, e1.oracleFeedId, nowTs);
+                _applyGenesisLockWithOracle(templateId, k, e1, e1.oracleClass, e1.oracleFeedId, nowTs);
             if (!lockApplied) {
                 return;
             }
@@ -216,19 +209,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
             maxConf = MarketTypes.effectiveOracleMaxConfidenceBps(ePrev, oracleConfig.maxConfidenceBps);
         }
 
-        if (!_resolveAndLockRound(
-                templateId,
-                prev,
-                k,
-                ePrev.oracleClass,
-                ePrev.oracleFeedId,
-                maxDelay,
-                maxConf,
-                nowTs,
-                MarketTypes.requiresCheckpointAOnLock(eCur),
-                eCur.oracleClass,
-                eCur.oracleFeedId
-            )) {
+        if (!_resolveAndLockRound(templateId, prev, k, maxDelay, maxConf, nowTs)) {
             return;
         }
         uint64 newOpen = _openRollingEpoch(templateId, nowTs, t);
@@ -303,39 +284,36 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         bytes32 templateId,
         uint64 epochId,
         MarketTypes.Epoch storage e,
-        MarketTypes.Ledger storage ledger,
         MarketTypes.OracleClass oracleClass,
         bytes32 oracleFeedId,
         uint64 nowTs
     ) internal returns (bool) {
         uint64 maxDelay = MarketTypes.effectiveOracleMaxDelaySeconds(e, oracleConfig.maxDelaySeconds);
         uint16 maxConf = MarketTypes.effectiveOracleMaxConfidenceBps(e, oracleConfig.maxConfidenceBps);
-        (bool ok, int256 priceE8, uint64 publishTime, uint256 confidenceE8, uint80 oracleRoundId) =
-            _tryReadOracle(templateId, oracleClass, oracleFeedId, maxDelay, nowTs);
+        (bool ok, OracleSample memory sample) = _tryReadOracleSample(templateId, oracleClass, oracleFeedId, maxDelay, nowTs);
         if (!ok) {
-            ledger.rollingPhase = MarketTypes.RollingPhase.Halted;
-            ledger.rollingHaltReason = MarketTypes.RollingHaltReason.OracleFailure;
-            ledger.haltedAtEpochId = epochId;
-            emit RollingHalted(templateId, uint8(MarketTypes.RollingHaltReason.OracleFailure), epochId);
+            _haltRollingOracleFailure(templateId, epochId);
             return false;
         }
-        if (!_confidenceWithinBand(priceE8, confidenceE8, maxConf)) {
-            ledger.rollingPhase = MarketTypes.RollingPhase.Halted;
-            ledger.rollingHaltReason = MarketTypes.RollingHaltReason.OracleConfidenceWide;
-            ledger.haltedAtEpochId = epochId;
-            emit RollingHalted(templateId, uint8(MarketTypes.RollingHaltReason.OracleConfidenceWide), epochId);
+        if (!_confidenceWithinBand(sample.priceE8, sample.confidenceE8, maxConf)) {
+            _haltRollingOracleConfidenceWide(templateId, epochId);
             return false;
         }
         if (!e.isLockable(nowTs)) revert TooEarlyToLock();
         if (e.checkpointA.written) revert CheckpointAlreadyWritten();
-        if (!e.validateCheckpointAPublishTime(publishTime, nowTs, maxDelay)) revert InvalidOraclePublishTime();
+        if (!e.validateCheckpointAPublishTime(sample.publishTime, nowTs, maxDelay)) revert InvalidOraclePublishTime();
         e.checkpointA = MarketTypes.OracleCheckpoint({
-            valueE8: priceE8, publishTime: publishTime, confidenceE8: _toConf128(confidenceE8), written: true
+            valueE8: sample.priceE8,
+            publishTime: sample.publishTime,
+            confidenceE8: _toConf128(sample.confidenceE8),
+            written: true
         });
         e.status = MarketTypes.EpochStatus.Locked;
         e.lockedAt = nowTs;
         emit EpochLocked(templateId, epochId, e.checkpointA.valueE8, e.checkpointA.publishTime);
-        emit EpochLockedV2(templateId, epochId, e.checkpointA.valueE8, e.checkpointA.publishTime, oracleRoundId);
+        emit EpochLockedV2(
+            templateId, epochId, e.checkpointA.valueE8, e.checkpointA.publishTime, sample.oracleRoundId
+        );
         return true;
     }
 
@@ -354,32 +332,29 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         );
     }
 
+    // slither-disable-next-line reentrancy-no-eth -- reachable only from `performUpkeep` (`nonReentrant`); yield router is trusted.
     function _resolveAndLockRound(
         bytes32 templateId,
         uint64 prevEpochId,
         uint64 lockEpochId,
-        MarketTypes.OracleClass resolveOracleClass,
-        bytes32 oracleFeedId,
         uint64 maxDelay,
         uint16 maxConf,
-        uint64 nowTs,
-        bool needsCheckpointA,
-        MarketTypes.OracleClass lockOracleClass,
-        bytes32 lockFeedId
+        uint64 nowTs
     ) internal returns (bool) {
-        (bool ok, int256 priceE8, uint64 publishTime, uint256 confidenceE8, uint80 oracleRoundId) =
-            _tryReadOracle(templateId, resolveOracleClass, oracleFeedId, maxDelay, nowTs);
+        MarketTypes.Epoch storage ePrev = _epochs[templateId][prevEpochId];
+        MarketTypes.Epoch storage eCur = _epochs[templateId][lockEpochId];
+        bool needsCheckpointA = MarketTypes.requiresCheckpointAOnLock(eCur);
+
+        (bool ok, OracleSample memory sample) =
+            _tryReadOracleSample(templateId, ePrev.oracleClass, ePrev.oracleFeedId, maxDelay, nowTs);
         if (!ok) {
             _haltRollingOracleFailure(templateId, lockEpochId);
             return false;
         }
-        if (needsCheckpointA && (lockOracleClass != resolveOracleClass || lockFeedId != oracleFeedId)) {
+        if (needsCheckpointA && (eCur.oracleClass != ePrev.oracleClass || eCur.oracleFeedId != ePrev.oracleFeedId)) {
             _haltRollingOracleFailure(templateId, lockEpochId);
             return false;
         }
-        OracleSample memory sample = OracleSample({
-            priceE8: priceE8, publishTime: publishTime, confidenceE8: confidenceE8, oracleRoundId: oracleRoundId
-        });
         if (!_confidenceWithinBand(sample.priceE8, sample.confidenceE8, maxConf)) {
             _haltRollingOracleConfidenceWide(templateId, lockEpochId);
             return false;
@@ -483,167 +458,10 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         if (rollingLink && !_isRollingResolveActive(templateId)) return;
         (uint256 yieldFee, uint256 netYield) = _applyGrossYield(templateId, ledger, grossYield);
 
-        SettlementOutputs memory outputs = _computeSettlementOutputsWithEffectivePool(e, netYield);
+        SettlementLogic.Outputs memory outputs = SettlementLogic.compute(e, netYield);
         _applyResolveAccounting(templateId, epochId, ledger, e, outputs, nowTs);
         _emitResolveEvents(templateId, epochId, outputs, oracleRoundId);
         _finalizeYieldAccounting(templateId, epochId, ledger, grossYield, yieldFee, netYield, outputs.refundMode);
-    }
-
-    function _applyResolveAccounting(
-        bytes32 templateId,
-        uint64 epochId,
-        MarketTypes.Ledger storage ledger,
-        MarketTypes.Epoch storage e,
-        SettlementOutputs memory outputs,
-        uint64 nowTs
-    ) internal {
-        if (outputs.claimLiabilityTotal > 0) {
-            _vaults[templateId].active -= outputs.claimLiabilityTotal;
-            _vaults[templateId].claims += outputs.claimLiabilityTotal;
-            MarketMath.reserveClaimsFromActive(ledger, outputs.claimLiabilityTotal);
-        }
-        if (outputs.settlementFeeTotal > 0) {
-            _vaults[templateId].active -= outputs.settlementFeeTotal;
-            _vaults[templateId].fees += outputs.settlementFeeTotal;
-            MarketMath.reserveFeesFromActive(ledger, outputs.settlementFeeTotal);
-        }
-        e.winningOutcomeMask = outputs.winningMask;
-        e.claimLiabilityTotal = outputs.refundMode ? 0 : outputs.claimLiabilityTotal;
-        e.totalRefundLiability = outputs.refundMode ? outputs.claimLiabilityTotal : 0;
-        e.settlementFeeTotal = outputs.settlementFeeTotal;
-        e.refundMode = outputs.refundMode;
-        e.claimable = true;
-        e.status = outputs.refundMode ? MarketTypes.EpochStatus.Voided : MarketTypes.EpochStatus.Resolved;
-        e.resolvedAt = nowTs;
-        ledger.lastResolvedEpochId = epochId;
-        _setRemainingWinningStake(templateId, epochId, outputs.refundMode);
-    }
-
-    function _emitResolveEvents(
-        bytes32 templateId,
-        uint64 epochId,
-        SettlementOutputs memory outputs,
-        uint80 oracleRoundId
-    ) internal {
-        MarketTypes.Epoch storage e = _epochs[templateId][epochId];
-        emit EpochResolved(
-            templateId,
-            epochId,
-            outputs.winningMask,
-            outputs.claimLiabilityTotal,
-            outputs.settlementFeeTotal,
-            outputs.refundMode
-        );
-        emit EpochResolvedV2(templateId, epochId, oracleRoundId, e.checkpointB.valueE8, e.checkpointB.publishTime);
-    }
-
-    function _setRemainingWinningStake(bytes32 templateId, uint64 epochId, bool refundMode) internal {
-        MarketTypes.Epoch storage e = _epochs[templateId][epochId];
-        if (refundMode) {
-            e.remainingWinningStake = 0;
-            return;
-        }
-        uint256 sum = 0;
-        uint8 n = e.outcomeCount;
-        for (uint256 i = 0; i < uint256(n); i++) {
-            if (((e.winningOutcomeMask >> i) & 1) == 1) sum += e.outcomePools[i];
-        }
-        e.remainingWinningStake = sum;
-    }
-
-    function _computeSettlementOutputsWithEffectivePool(MarketTypes.Epoch storage e, uint256 netYield)
-        internal
-        returns (SettlementOutputs memory outputs)
-    {
-        if (e.marketType == MarketTypes.MarketType.Direction) {
-            (bool voided, uint256 mask) = Resolvers.resolveDirection(e.checkpointA, e.checkpointB, e.equalPriceVoids);
-            if (voided) {
-                outputs.refundMode = true;
-                outputs.winningMask = 0;
-                outputs.claimLiabilityTotal = e.totalPool;
-                outputs.settlementFeeTotal = 0;
-                return outputs;
-            }
-            outputs.refundMode = false;
-            outputs.winningMask = mask;
-            e.winningOutcomeMask = mask;
-        } else if (e.marketType == MarketTypes.MarketType.Threshold) {
-            outputs.refundMode = false;
-            int256 effectiveThreshold = e.absoluteThresholdValueE8;
-            if (e.anchorPriceE8 != 0) {
-                effectiveThreshold = e.anchorPriceE8;
-            }
-            outputs.winningMask = Resolvers.resolveThreshold(e.condition, effectiveThreshold, e.checkpointB);
-            e.winningOutcomeMask = outputs.winningMask;
-        } else if (e.marketType == MarketTypes.MarketType.RangeClose) {
-            outputs.refundMode = false;
-            outputs.winningMask = Resolvers.resolveRangeClose(e.checkpointB, e.outcomeCount, e.rangeBoundsE8);
-            e.winningOutcomeMask = outputs.winningMask;
-        } else if (e.marketType == MarketTypes.MarketType.Velocity) {
-            outputs.refundMode = false;
-            outputs.winningMask = Resolvers.resolveVelocity(e.checkpointA, e.checkpointB, e.outcomeCount, e.velocityBoundsE4);
-            e.winningOutcomeMask = outputs.winningMask;
-        } else if (e.marketType == MarketTypes.MarketType.Ladder) {
-            outputs.refundMode = false;
-            outputs.winningMask = Resolvers.resolveLadder(e.checkpointB, e.outcomeCount, e.ladderBoundsE8);
-            e.winningOutcomeMask = outputs.winningMask;
-        } else if (e.marketType == MarketTypes.MarketType.Convergence) {
-            (bool voidedCv, uint256 maskCv) =
-                Resolvers.resolveConvergence(e.checkpointA, e.checkpointA_B, e.checkpointB, e.checkpointB_B, e.spreadToleranceBps);
-            if (voidedCv) {
-                outputs.refundMode = true;
-                outputs.winningMask = 0;
-                outputs.claimLiabilityTotal = e.totalPool;
-                outputs.settlementFeeTotal = 0;
-                return outputs;
-            }
-            outputs.refundMode = false;
-            outputs.winningMask = maskCv;
-            e.winningOutcomeMask = maskCv;
-        } else if (e.marketType == MarketTypes.MarketType.Composite) {
-            int256[4] memory thresholds;
-            for (uint256 i = 0; i < e.compositeFeedCount; i++) {
-                thresholds[i] = e.absoluteThresholdValueE8;
-            }
-            outputs.refundMode = false;
-            outputs.winningMask = Resolvers.resolveComposite(
-                e.compositeLogic, e.compositeFeedCount, e.compositeConditions, thresholds, e.compositeCheckpointsB
-            );
-            e.winningOutcomeMask = outputs.winningMask;
-        } else if (e.marketType == MarketTypes.MarketType.Corridor) {
-            outputs.refundMode = false;
-            outputs.winningMask =
-                Resolvers.resolveCorridor(e.epochHighE8, e.epochLowE8, e.rangeBoundsE8[1], e.rangeBoundsE8[0]);
-            e.winningOutcomeMask = outputs.winningMask;
-        } else {
-            outputs.refundMode = false;
-            outputs.winningMask =
-                Resolvers.resolveCascade(e.epochHighE8, e.epochLowE8, e.outcomeCount, e.rangeBoundsE8, e.cascadeDownward);
-            e.winningOutcomeMask = outputs.winningMask;
-        }
-        uint256 effectiveTotalPool = e.totalPool + netYield;
-        uint256 winningPool = 0;
-        for (uint256 i = 0; i < e.outcomeCount; i++) {
-            if (((outputs.winningMask >> i) & 1) == 1) winningPool += e.outcomePools[i];
-        }
-        // slither-disable-next-line unused-return -- third return is `distributableLosingPool`; only claim + fee used here.
-        if (e.marketType == MarketTypes.MarketType.Ladder) {
-            uint8 winnerIdx = 0;
-            for (uint8 i = 0; i < e.outcomeCount; i++) {
-                if (((outputs.winningMask >> i) & 1) == 1) {
-                    winnerIdx = i;
-                    break;
-                }
-            }
-            uint16 winnerWeight = e.ladderPayoutWeightsBps[winnerIdx];
-            (outputs.claimLiabilityTotal, outputs.settlementFeeTotal,) = MarketMath.computeLadderLiabilityComponents(
-                effectiveTotalPool, winningPool, e.settlementFeeBps, e.feeOnLosingPool, winnerWeight
-            );
-        } else {
-            (outputs.claimLiabilityTotal, outputs.settlementFeeTotal,) = MarketMath.computeClaimLiabilityComponents(
-                effectiveTotalPool, winningPool, e.settlementFeeBps, e.feeOnLosingPool
-            );
-        }
     }
 
     function _withdrawResolvePrincipal(bytes32 templateId, uint64 epochId, uint256 totalPool, bool rollingLink)
@@ -651,10 +469,10 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         returns (uint256 grossYield)
     {
         IYieldRouterV2 r = yieldRouter;
-        if (address(r) == address(0) || totalPool == 0) return 0;
+        if (address(r) == address(0) || totalPool < 1) return 0;
 
         uint256 routedPrincipal = (totalPool * uint256(10_000 - YIELD_BUFFER_BPS)) / 10_000;
-        if (routedPrincipal == 0) return 0;
+        if (routedPrincipal < 1) return 0;
 
         try r.withdrawScaled(templateId, routedPrincipal) returns (uint256 grossReturned) {
             if (grossReturned > routedPrincipal) return grossReturned - routedPrincipal;
@@ -682,7 +500,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         internal
         returns (uint256 yieldFee, uint256 netYield)
     {
-        if (grossYield == 0) return (0, 0);
+        if (grossYield < 1) return (0, 0);
 
         _vaults[templateId].active += grossYield;
         ledger.increaseActiveCollateral(grossYield);
@@ -704,7 +522,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         uint256 netYield,
         bool refundMode
     ) internal {
-        if (grossYield == 0) return;
+        if (grossYield < 1) return;
 
         if (refundMode) {
             _vaults[templateId].active -= netYield;
@@ -817,6 +635,17 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
                 return (false, 0, 0, 0, 0);
             }
         }
+    }
+
+    function _tryReadOracleSample(
+        bytes32 templateId,
+        MarketTypes.OracleClass oracleClass,
+        bytes32 feedId,
+        uint64 maxDelay,
+        uint64 nowTs
+    ) internal returns (bool ok, OracleSample memory sample) {
+        (ok, sample.priceE8, sample.publishTime, sample.confidenceE8, sample.oracleRoundId) =
+            _tryReadOracle(templateId, oracleClass, feedId, maxDelay, nowTs);
     }
 
     function _enforceAndUpdateOracleCursor(bytes32 templateId, bytes32 feedId, uint80 oracleRoundId, uint64 publishTime)
