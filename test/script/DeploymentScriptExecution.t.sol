@@ -124,6 +124,7 @@ contract DeploymentScriptExecutionTest is Test {
     function test_upgradeMarketEngine_success() external {
         address proxy = _deployProductionFixture();
         vm.setEnv("PROXY_ADDRESS", vm.toString(proxy));
+        vm.setEnv("EXPECTED_CHAIN_ID", vm.toString(block.chainid));
         vm.setEnv("PRIVATE_KEY", "0");
         vm.setEnv("ALLOW_AMBIENT_BROADCAST", "true");
 
