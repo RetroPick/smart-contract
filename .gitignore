@@ -27,3 +27,12 @@ test-ledger
 .cursor
 .idea
 .vscode
+.docs
+
+.docs/*
+.agent/*
+.agents/*
+.cursor/*
+.reports/*
+.cache/*
+.scripts/*
