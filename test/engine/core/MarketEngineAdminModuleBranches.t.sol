@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {MarketEngineBase} from "../../MarketEngineBase.t.sol";
 import {MockERC20} from "../../../src/test/MockERC20.sol";
@@ -88,6 +88,11 @@ contract MarketEngineAdminModuleBranchesTest is MarketEngineBase {
         vm.prank(admin);
         vm.expectRevert(bytes4(keccak256("Unauthorized()")));
         engine.yieldEmergencyWithdraw(tid);
+    }
+
+    function test_resetYieldRouterFailures_revertsForUnauthorized() public {
+        vm.expectRevert(bytes4(keccak256("Unauthorized()")));
+        engine.resetYieldRouterFailures();
     }
 
     function test_withdrawFees_revertsOnZeroAmountAndInsufficientReserve() public {

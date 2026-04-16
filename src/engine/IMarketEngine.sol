@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IPriceOracle} from "../interfaces/IPriceOracle.sol";
@@ -106,6 +106,7 @@ interface IMarketEngine {
     function initializeMarket(bytes32 templateId) external;
     function pauseProgram(bool paused) external;
     function setYieldRouter(address router, uint16 feeBps) external;
+    function resetYieldRouterFailures() external;
     function setRateOracle(address oracle) external;
     function setSmartDataOracle(address oracle) external;
     function setMacroOracle(address oracle) external;
@@ -198,6 +199,8 @@ interface IMarketEngine {
     function yieldRouter() external view returns (IYieldRouterV2);
     function lmRewardsEnabled() external view returns (bool);
     function yieldFeeBps() external view returns (uint16);
+    function yieldRouterDisabled() external view returns (bool);
+    function yieldRouterFailureCount() external view returns (uint8);
     function lastOracleRoundIdByTemplate(bytes32 templateId) external view returns (uint80);
 
     function templates(bytes32 templateId) external view returns (MarketTypes.Template memory);

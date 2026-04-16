@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {MarketEngineDispatcher} from "../src/engine/MarketEngineDispatcher.sol";
 import {IMarketEngine} from "../src/engine/IMarketEngine.sol";
@@ -14,12 +14,19 @@ library ScriptSelectorMatrix {
     }
 
     function wireAll(MarketEngineDispatcher dispatcher, Modules memory m) internal {
+        dispatcher.registerModule(m.admin, keccak256(m.admin.code));
+        dispatcher.registerModule(m.viewModule, keccak256(m.viewModule.code));
+        dispatcher.registerModule(m.userOpsClaims, keccak256(m.userOpsClaims.code));
+        dispatcher.registerModule(m.coreLifecycle, keccak256(m.coreLifecycle.code));
+        dispatcher.registerModule(m.rollingLifecycle, keccak256(m.rollingLifecycle.code));
+
         // Admin / config selectors
         dispatcher.setSelectorModule(IMarketEngine.pauseProgram.selector, m.admin, false);
         dispatcher.setSelectorModule(IMarketEngine.setTreasury.selector, m.admin, false);
         dispatcher.setSelectorModule(IMarketEngine.setWorkerAuthority.selector, m.admin, false);
         dispatcher.setSelectorModule(IMarketEngine.setDepositExecutor.selector, m.admin, false);
         dispatcher.setSelectorModule(IMarketEngine.setYieldRouter.selector, m.admin, false);
+        dispatcher.setSelectorModule(IMarketEngine.resetYieldRouterFailures.selector, m.admin, false);
         dispatcher.setSelectorModule(IMarketEngine.setRateOracle.selector, m.admin, false);
         dispatcher.setSelectorModule(IMarketEngine.setSmartDataOracle.selector, m.admin, false);
         dispatcher.setSelectorModule(IMarketEngine.setMacroOracle.selector, m.admin, false);
@@ -65,13 +72,14 @@ library ScriptSelectorMatrix {
 
     /// @notice Every selector registered in `wireAll` — use in tests to detect wiring drift.
     function delegatedSelectors() internal pure returns (bytes4[] memory s) {
-        s = new bytes4[](38);
+        s = new bytes4[](39);
         uint256 i;
         s[i++] = IMarketEngine.pauseProgram.selector;
         s[i++] = IMarketEngine.setTreasury.selector;
         s[i++] = IMarketEngine.setWorkerAuthority.selector;
         s[i++] = IMarketEngine.setDepositExecutor.selector;
         s[i++] = IMarketEngine.setYieldRouter.selector;
+        s[i++] = IMarketEngine.resetYieldRouterFailures.selector;
         s[i++] = IMarketEngine.setRateOracle.selector;
         s[i++] = IMarketEngine.setSmartDataOracle.selector;
         s[i++] = IMarketEngine.setMacroOracle.selector;
@@ -105,7 +113,7 @@ library ScriptSelectorMatrix {
         s[i++] = IMarketEngine.haltRollingMarket.selector;
         s[i++] = IMarketEngine.cancelRollingEpochWhileHalted.selector;
         s[i++] = IMarketEngine.resetRollingLifecycle.selector;
-        require(i == 38, "delegatedSelectors length");
+        require(i == 39, "delegatedSelectors length");
     }
 
     /// @dev Reverts with `selector not wired` if any delegated selector maps to `address(0)`.

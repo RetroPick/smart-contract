@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 /// @title YieldAccounting
 /// @notice Ray math (1e27) aligned with Aave v3 `WadRayMath` rounding for scaled balance accounting.

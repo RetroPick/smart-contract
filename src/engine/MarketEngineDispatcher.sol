@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
@@ -17,10 +17,28 @@ contract MarketEngineDispatcher is Initializable, ReentrancyGuardTransient, UUPS
     bytes4 private constant SELECTOR_UPGRADE_TO_AND_CALL = 0x4f1ef286;
     bytes4 private constant SELECTOR_PROXIABLE_UUID = 0x52d1902d;
     bytes4 private constant SELECTOR_SET_SELECTOR_MODULE = 0x5837c6a8; // setSelectorModule(bytes4,address,bool)
+    /// @dev keccak256(abi.encode(uint256(keccak256("retropick.storage.MarketEngineDispatcher.ModuleRegistry")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant MODULE_REGISTRY_STORAGE_LOCATION =
+        0x97dc697845f891728b442225407661712d01fa686d06d21698367248a953bc00;
+    bytes4 private constant SELECTOR_STORAGE_COMPATIBILITY = bytes4(keccak256("marketEngineStorageCompatibility()"));
+
+    /// @custom:storage-location erc7201:retropick.storage.MarketEngineDispatcher.ModuleRegistry
+    struct ModuleRegistryStorage {
+        mapping(bytes4 selector => address module) selectorToModule;
+        mapping(bytes4 selector => bool immutableSelector) selectorImmutable;
+        mapping(address module => bool approved) approvedModules;
+        mapping(address module => bytes32 codeHash) moduleCodeHash;
+    }
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
+    }
+
+    function _moduleRegistryStorage() private pure returns (ModuleRegistryStorage storage $) {
+        assembly {
+            $.slot := MODULE_REGISTRY_STORAGE_LOCATION
+        }
     }
 
     function initialize(IMarketEngine.InitConfig calldata config) external initializer onlyProxy {
@@ -52,17 +70,50 @@ contract MarketEngineDispatcher is Initializable, ReentrancyGuardTransient, UUPS
         emit ConfigInitialized(config.admin, config.treasury, config.worker);
     }
 
+    function registerModule(address module, bytes32 expectedCodeHash) external onlyAdmin {
+        if (module == address(0) || module.code.length == 0) revert InvalidModule();
+        _enforceModuleStorageCompatibility(module);
+        bytes32 actualCodeHash = keccak256(module.code);
+        if (actualCodeHash != expectedCodeHash) {
+            revert ModuleCodeHashMismatch(module, expectedCodeHash, actualCodeHash);
+        }
+
+        ModuleRegistryStorage storage $ = _moduleRegistryStorage();
+        $.approvedModules[module] = true;
+        $.moduleCodeHash[module] = expectedCodeHash;
+        emit ModuleRegistered(module, expectedCodeHash);
+    }
+
+    function revokeModule(address module) external onlyAdmin {
+        ModuleRegistryStorage storage $ = _moduleRegistryStorage();
+        delete $.approvedModules[module];
+        delete $.moduleCodeHash[module];
+        emit ModuleRevoked(module);
+    }
+
+    function isModuleApproved(address module) external view returns (bool) {
+        return _moduleRegistryStorage().approvedModules[module];
+    }
+
+    function getModuleCodeHash(address module) external view returns (bytes32) {
+        return _moduleRegistryStorage().moduleCodeHash[module];
+    }
+
     function setSelectorModule(bytes4 selector, address module, bool makeImmutable) external onlyAdmin {
         if (module == address(0) || module.code.length == 0) revert InvalidModule();
-        if (selectorImmutable[selector]) revert SelectorImmutable(selector);
+        _enforceApprovedModule(module);
+
+        ModuleRegistryStorage storage $ = _moduleRegistryStorage();
+        if ($.selectorImmutable[selector]) revert SelectorImmutable(selector);
         if (_isRootOwnedSelector(selector)) revert SelectorImmutable(selector);
-        selectorToModule[selector] = module;
-        if (makeImmutable) selectorImmutable[selector] = true;
+        $.selectorToModule[selector] = module;
+        if (makeImmutable) $.selectorImmutable[selector] = true;
         emit SelectorModuleSet(selector, module, makeImmutable);
     }
 
     function getSelectorModule(bytes4 selector) external view returns (address module, bool immutableSelector_) {
-        return (selectorToModule[selector], selectorImmutable[selector]);
+        ModuleRegistryStorage storage $ = _moduleRegistryStorage();
+        return ($.selectorToModule[selector], $.selectorImmutable[selector]);
     }
 
     // Backward-compatible mapping getters (same selectors as legacy monolith).
@@ -86,8 +137,10 @@ contract MarketEngineDispatcher is Initializable, ReentrancyGuardTransient, UUPS
     }
 
     function _delegateForSelector(bytes4 selector) private {
-        address module = selectorToModule[selector];
+        ModuleRegistryStorage storage $ = _moduleRegistryStorage();
+        address module = $.selectorToModule[selector];
         if (module == address(0)) revert ModuleNotSet(selector);
+        _enforceApprovedModule(module);
 
         assembly {
             calldatacopy(0, 0, calldatasize())
@@ -97,6 +150,25 @@ contract MarketEngineDispatcher is Initializable, ReentrancyGuardTransient, UUPS
             case 0 { revert(0, returndatasize()) }
             default { return(0, returndatasize()) }
         }
+    }
+
+    function _enforceApprovedModule(address module) private view {
+        ModuleRegistryStorage storage $ = _moduleRegistryStorage();
+        if (!$.approvedModules[module]) revert UnapprovedModule(module);
+
+        bytes32 expectedCodeHash = $.moduleCodeHash[module];
+        bytes32 actualCodeHash = keccak256(module.code);
+        if (actualCodeHash != expectedCodeHash) {
+            revert ModuleCodeHashMismatch(module, expectedCodeHash, actualCodeHash);
+        }
+        _enforceModuleStorageCompatibility(module);
+    }
+
+    function _enforceModuleStorageCompatibility(address module) private view {
+        (bool ok, bytes memory out) = module.staticcall(abi.encodeWithSelector(SELECTOR_STORAGE_COMPATIBILITY));
+        if (!ok || out.length != 32) revert IncompatibleModuleStorage(module);
+        bytes32 marker = abi.decode(out, (bytes32));
+        if (marker != MODULE_STORAGE_COMPATIBILITY_ID) revert IncompatibleModuleStorage(module);
     }
 
     fallback() external payable {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {MarketTypes} from "../types/MarketTypes.sol";
 import {MarketMath} from "../math/MarketMath.sol";

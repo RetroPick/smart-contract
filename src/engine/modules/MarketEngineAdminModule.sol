@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {MarketEngineState} from "../MarketEngineState.sol";
 import {IYieldRouterV2} from "../../interfaces/IYieldRouterV2.sol";
@@ -47,10 +47,13 @@ contract MarketEngineAdminModule is MarketEngineState {
         address old = address(yieldRouter);
         yieldRouter = IYieldRouterV2(router);
         yieldFeeBps = router == address(0) ? 0 : feeBps;
+        yieldRouterFailureCount = 0;
+        yieldRouterDisabled = false;
         if (router == address(0)) {
             lmRewardsEnabled = false;
         }
         emit YieldRouterSet(old, router, yieldFeeBps);
+        emit YieldRouterFailureStateReset();
     }
 
     function setRateOracle(address oracle) external {
@@ -112,6 +115,13 @@ contract MarketEngineAdminModule is MarketEngineState {
         if (address(r) == address(0)) revert Unauthorized();
         // slither-disable-next-line unused-return -- gross underlying is transferred to engine by router; no local use.
         r.emergencyWithdraw(templateId);
+    }
+
+    function resetYieldRouterFailures() external {
+        if (msg.sender != admin) revert Unauthorized();
+        yieldRouterFailureCount = 0;
+        yieldRouterDisabled = false;
+        emit YieldRouterFailureStateReset();
     }
 
     function initializeMarket(bytes32 templateId) external {

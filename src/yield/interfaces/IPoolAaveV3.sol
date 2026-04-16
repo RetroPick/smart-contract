@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 /// @notice Aave v3 pool configuration map (packed `uint256`, same layout as Aave `ReserveConfigurationMap`).
 struct ReserveConfigurationMap {

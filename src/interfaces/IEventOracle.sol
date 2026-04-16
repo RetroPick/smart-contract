@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 /// @title IEventOracle
 /// @notice Trusted reporter path: signed payloads settle non–price-feed markets into oracle checkpoints.

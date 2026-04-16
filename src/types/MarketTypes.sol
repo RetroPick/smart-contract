@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 /// @title MarketTypes
 /// @notice Canonical enums/structs/helpers for RetroPick `MarketEngine`.
@@ -30,6 +30,8 @@ library MarketTypes {
     uint8 internal constant MAX_OUTCOMES = 8;
     uint8 internal constant RANGE_BOUNDS_LEN = MAX_OUTCOMES - 1;
     uint256 internal constant BPS_DENOMINATOR = 10_000;
+    /// @dev Absolute confidence floor (8 decimals) used with relative bps checks for tiny prices.
+    uint256 internal constant MIN_ABSOLUTE_CONFIDENCE_E8 = 10;
     uint256 internal constant SLUG_MAX_LEN = 32;
     uint256 internal constant ASSET_SYMBOL_MAX_LEN = 16;
 
@@ -250,6 +252,8 @@ library MarketTypes {
         uint256 totalRefundLiability;
         uint256 claimedTotal;
         uint256 remainingWinningStake;
+        /// @dev Principal successfully routed into `yieldRouter` for this epoch.
+        uint256 routedPrincipal;
         OracleKind templateOracleKind;
         address eventOracle;
         int256 anchorPriceE8;
@@ -382,5 +386,26 @@ library MarketTypes {
     {
         if (e.oracleMaxConfidenceBps > 0) return e.oracleMaxConfidenceBps;
         return globalMaxConfidenceBps;
+    }
+
+    /// @notice Computes hybrid confidence limit: relative bps plus absolute floor for tiny prices.
+    /// @dev If `maxConfidenceBps == 0`, strict mode remains enabled (only zero confidence accepted).
+    function confidenceLimitE8(int256 priceE8, uint16 maxConfidenceBps, uint256 minAbsoluteConfidenceE8)
+        internal
+        pure
+        returns (uint256)
+    {
+        if (priceE8 == type(int256).min) return type(uint256).max;
+        if (maxConfidenceBps == 0) return 0;
+
+        uint256 absPriceE8 = priceE8 < 0 ? uint256(-priceE8) : uint256(priceE8);
+        uint256 relativeLimit = _mulBps(absPriceE8, maxConfidenceBps);
+        return relativeLimit > minAbsoluteConfidenceE8 ? relativeLimit : minAbsoluteConfidenceE8;
+    }
+
+    function _mulBps(uint256 value, uint16 bps) private pure returns (uint256) {
+        uint256 q = value / BPS_DENOMINATOR;
+        uint256 r = value % BPS_DENOMINATOR;
+        return (q * uint256(bps)) + ((r * uint256(bps)) / BPS_DENOMINATOR);
     }
 }

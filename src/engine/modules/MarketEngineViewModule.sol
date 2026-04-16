@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 import {MarketEngineState} from "../MarketEngineState.sol";
 import {MarketTypes} from "../../types/MarketTypes.sol";
 
@@ -13,7 +13,9 @@ contract MarketEngineViewModule is MarketEngineState {
         uint64[] storage src = _userEpochs[templateId][user];
         uint256 n = src.length;
         if (cursor >= n) return (new uint64[](0), cursor);
-        uint256 end = cursor + size;
+        uint256 boundedSize = size;
+        if (boundedSize > MAX_USER_EPOCHS_PAGE_SIZE) boundedSize = MAX_USER_EPOCHS_PAGE_SIZE;
+        uint256 end = cursor + boundedSize;
         if (end > n) end = n;
         uint256 outLen = end - cursor;
         epochIds = new uint64[](outLen);

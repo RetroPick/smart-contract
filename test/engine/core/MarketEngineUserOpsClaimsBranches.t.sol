@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {MarketEngineBase} from "../../MarketEngineBase.t.sol";
 import {IMarketEngine as MarketEngine} from "../../../src/engine/IMarketEngine.sol";
@@ -13,7 +13,19 @@ contract MarketEngineUserOpsClaimsBranchesTest is MarketEngineBase {
         vm.stopPrank();
 
         uint64[] memory epochIds = new uint64[](0);
-        vm.expectRevert(bytes4(keccak256("NothingToClaim()")));
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("InvalidBatchSize(uint256)")), uint256(0)));
+        engine.claimMany(tid, epochIds);
+    }
+
+    function test_claimMany_revertsOnOversizedBatch() public {
+        vm.startPrank(admin);
+        engine.upsertTemplate(_defaultThresholdTemplate("claim-many-oversized"));
+        bytes32 tid = _tid("claim-many-oversized");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64[] memory epochIds = new uint64[](101);
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("InvalidBatchSize(uint256)")), uint256(101)));
         engine.claimMany(tid, epochIds);
     }
 
@@ -37,5 +49,26 @@ contract MarketEngineUserOpsClaimsBranchesTest is MarketEngineBase {
 
         vm.expectRevert(bytes4(keccak256("PartialSwitchDisallowed()")));
         engine.switchSide(tid, 1, 0, 1, 500e18);
+    }
+
+    function test_switchSide_reverts_when_outcome_index_exceeds_max_outcomes() public {
+        vm.startPrank(admin);
+        engine.upsertTemplate(_defaultThresholdTemplate("invalid-outcome"));
+        bytes32 tid = _tid("invalid-outcome");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 7_100_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.openEpoch(tid, 1, t0 + 20, t0 + 200, t0 + 300);
+
+        token.mint(address(this), 1000e18);
+        token.approve(address(engine), type(uint256).max);
+        vm.warp(t0 + 30);
+        engine.depositToSide(tid, 1, 0, 1000e18);
+
+        vm.expectRevert(bytes4(keccak256("InvalidOutcome()")));
+        engine.switchSide(tid, 1, 8, 1, 100e18);
     }
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {UnsafeUpgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
@@ -247,6 +247,36 @@ contract MarketEngineUXIntegrationsTest is Test {
         assertEq(next2, 1);
     }
 
+    function test_userEpochs_pagination_caps_requested_size() public {
+        MockERC20 token = new MockERC20();
+        MockPriceOracle oracle = new MockPriceOracle();
+        MarketEngine engine = _deployEngine(IERC20(address(token)), oracle);
+
+        vm.startPrank(admin);
+        engine.upsertTemplate(_directionManualTemplate(engine, "dir_cap"));
+        bytes32 tid = engine.templateIdFromSlug("dir_cap");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 2_200_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.openEpoch(tid, 1, t0 + 100, t0 + 300, t0 + 500);
+
+        address user = address(0xCAFE);
+        token.mint(user, 1e24);
+        vm.startPrank(user);
+        token.approve(address(engine), type(uint256).max);
+        vm.warp(t0 + 150);
+        engine.depositToSide(tid, 1, 0, 100e18);
+        vm.stopPrank();
+
+        (uint64[] memory epochs, uint256 next) = engine.getUserEpochs(tid, user, 0, type(uint256).max);
+        assertEq(epochs.length, 1);
+        assertEq(epochs[0], 1);
+        assertEq(next, 1);
+    }
+
     function test_depositToSideFor_indexes_beneficiary() public {
         MockERC20 token = new MockERC20();
         MockPriceOracle oracle = new MockPriceOracle();
@@ -356,6 +386,79 @@ contract MarketEngineUXIntegrationsTest is Test {
         engine.resolveEpoch(tid, 1);
     }
 
+    function test_oracleRoundId_reverts_when_round_id_zero_from_roundid_interface() public {
+        MockERC20 token = new MockERC20();
+        MockPriceOracleWithRoundId oracle = new MockPriceOracleWithRoundId();
+        MarketEngine engine = _deployEngine(IERC20(address(token)), IPriceOracle(address(oracle)));
+
+        vm.startPrank(admin);
+        engine.upsertTemplate(_directionManualTemplate(engine, "dir_zero_rid"));
+        bytes32 tid = engine.templateIdFromSlug("dir_zero_rid");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 4_200_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.openEpoch(tid, 1, t0 + 100, t0 + 200, t0 + 300);
+
+        token.mint(address(this), 1e24);
+        token.approve(address(engine), type(uint256).max);
+        vm.warp(t0 + 150);
+        engine.depositToSide(tid, 1, 0, 100e18);
+
+        vm.warp(t0 + 200);
+        oracle.set(feed, 0, 100e8, uint64(t0 + 200), 0);
+        vm.prank(worker);
+        vm.expectRevert(bytes4(keccak256("InvalidOracleFeed()")));
+        engine.lockEpoch(tid, 1);
+    }
+
+    function test_oracleRoundId_reverts_when_interface_switches_to_fallback_mode() public {
+        MockERC20 token = new MockERC20();
+        MockPriceOracleWithRoundId oracle = new MockPriceOracleWithRoundId();
+        MarketEngine engine = _deployEngine(IERC20(address(token)), IPriceOracle(address(oracle)));
+
+        vm.startPrank(admin);
+        engine.upsertTemplate(_directionManualTemplate(engine, "dir_switch_mode"));
+        bytes32 tid = engine.templateIdFromSlug("dir_switch_mode");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 4_300_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.openEpoch(tid, 1, t0 + 100, t0 + 200, t0 + 300);
+
+        token.mint(address(this), 1e24);
+        token.approve(address(engine), type(uint256).max);
+        vm.warp(t0 + 150);
+        engine.depositToSide(tid, 1, 0, 100e18);
+
+        vm.warp(t0 + 200);
+        oracle.set(feed, 10, 100e8, uint64(t0 + 200), 0);
+        vm.prank(worker);
+        engine.lockEpoch(tid, 1);
+
+        // Force fallback path on resolve. Mode switch (round-id -> no-round-id) must fail closed.
+        vm.mockCallRevert(
+            address(oracle),
+            abi.encodeWithSelector(
+                bytes4(keccak256("getNormalizedPriceWithRoundId(bytes32,uint64,uint64)")),
+                feed,
+                uint64(3600),
+                uint64(t0 + 300)
+            ),
+            hex""
+        );
+        vm.warp(t0 + 300);
+        oracle.set(feed, 10, 110e8, uint64(t0 + 300), 0);
+        vm.prank(worker);
+        vm.expectRevert(bytes4(keccak256("InvalidOracleFeed()")));
+        engine.resolveEpoch(tid, 1);
+        vm.clearMockedCalls();
+    }
+
     function _wireModules(
         MarketEngineDispatcher dispatcher,
         address adminModule,
@@ -364,11 +467,18 @@ contract MarketEngineUXIntegrationsTest is Test {
         address coreLifecycleModule,
         address rollingLifecycleModule
     ) internal {
+        dispatcher.registerModule(adminModule, keccak256(adminModule.code));
+        dispatcher.registerModule(viewModule, keccak256(viewModule.code));
+        dispatcher.registerModule(userOpsClaimsModule, keccak256(userOpsClaimsModule.code));
+        dispatcher.registerModule(coreLifecycleModule, keccak256(coreLifecycleModule.code));
+        dispatcher.registerModule(rollingLifecycleModule, keccak256(rollingLifecycleModule.code));
+
         dispatcher.setSelectorModule(bytes4(keccak256("pauseProgram(bool)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setTreasury(address)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setWorkerAuthority(address)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setDepositExecutor(address,bool)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setYieldRouter(address,uint16)")), adminModule, false);
+        dispatcher.setSelectorModule(bytes4(keccak256("resetYieldRouterFailures()")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setRateOracle(address)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setSmartDataOracle(address)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setMacroOracle(address)")), adminModule, false);

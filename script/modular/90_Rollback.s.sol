@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {Script} from "forge-std/Script.sol";
 import {MarketEngineDispatcher} from "../../src/engine/MarketEngineDispatcher.sol";
@@ -19,6 +19,7 @@ contract RollbackModular is Script {
         address rollbackModule = vm.envAddress("ROLLBACK_MODULE");
 
         vm.startBroadcast();
+        MarketEngineDispatcher(proxy).registerModule(rollbackModule, keccak256(rollbackModule.code));
         MarketEngineDispatcher(proxy).setSelectorModule(selector, rollbackModule, false);
         emit SelectorRolledBack(proxy, selector, rollbackModule);
         vm.stopBroadcast();

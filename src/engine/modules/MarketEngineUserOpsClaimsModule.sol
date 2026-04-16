@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {MarketEngineState} from "../MarketEngineState.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -46,6 +46,7 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
         if (!configInitialized) revert Unauthorized();
         if (grossAmount == 0) revert ZeroStake();
         if (fromOutcome == toOutcome) revert InvalidOutcome();
+        if (fromOutcome >= MarketTypes.MAX_OUTCOMES || toOutcome >= MarketTypes.MAX_OUTCOMES) revert InvalidOutcome();
 
         MarketTypes.Template storage t = _templates[templateId];
         MarketTypes.Ledger storage ledger = _ledgers[templateId];
@@ -92,7 +93,7 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
             vault.active -= feeAmount;
             vault.fees += feeAmount;
             MarketMath.reserveFeesFromActive(ledger, feeAmount);
-            _withdrawSwitchFeePrincipal(templateId, feeAmount, vault, ledger);
+            _withdrawSwitchFeePrincipal(templateId, epochId, feeAmount, vault, ledger);
         }
         emit SideSwitched(templateId, epochId, msg.sender, fromOutcome, toOutcome, grossAmount, feeAmount, netAmount);
     }
@@ -104,6 +105,7 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
     }
 
     function claimMany(bytes32 templateId, uint64[] calldata epochIds) external nonReentrant {
+        _validateBatchSize(epochIds.length);
         uint256 total = 0;
         for (uint256 i = 0; i < epochIds.length; i++) {
             uint256 amt = _claimOne(templateId, epochIds[i], msg.sender);
@@ -124,6 +126,7 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
     ) internal {
         if (!configInitialized) revert Unauthorized();
         if (amount == 0) revert ZeroStake();
+        if (outcomeIndex >= MarketTypes.MAX_OUTCOMES) revert InvalidOutcome();
         MarketTypes.Template storage t = _templates[templateId];
         MarketTypes.Ledger storage ledger = _ledgers[templateId];
         if (!ledger.initialized) revert InvalidTemplate();
@@ -171,8 +174,13 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
             uint256 routeAmount = (amount * uint256(10_000 - YIELD_BUFFER_BPS)) / 10_000;
             if (routeAmount > 0) {
                 stakeToken.forceApprove(address(r), routeAmount);
-                // slither-disable-next-line unused-return -- `depositScaled` return (attribution units) intentionally unused; failures are isolated in `catch`.
-                try r.depositScaled(templateId, routeAmount) {}
+                try r.depositScaled(templateId, routeAmount) returns (uint256 attributionUnits) {
+                    if (attributionUnits > 0) {
+                        e.routedPrincipal += routeAmount;
+                    } else {
+                        emit YieldRouterDepositFailed(templateId, routeAmount);
+                    }
+                }
                 catch {
                     emit YieldRouterDepositFailed(templateId, routeAmount);
                 }
@@ -243,6 +251,7 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
 
     function _withdrawSwitchFeePrincipal(
         bytes32 templateId,
+        uint64 epochId,
         uint256 feeAmount,
         MarketTypes.VaultBalances storage vault,
         MarketTypes.Ledger storage ledger
@@ -252,8 +261,12 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
 
         uint256 principalToWithdraw = (feeAmount * uint256(10_000 - YIELD_BUFFER_BPS)) / 10_000;
         if (principalToWithdraw == 0) return;
+        MarketTypes.Epoch storage e = _epochs[templateId][epochId];
+        if (principalToWithdraw > e.routedPrincipal) principalToWithdraw = e.routedPrincipal;
+        if (principalToWithdraw == 0) return;
 
         uint256 grossReturned = r.withdrawScaled(templateId, principalToWithdraw);
+        e.routedPrincipal -= principalToWithdraw;
         if (grossReturned > principalToWithdraw) {
             uint256 grossYield = grossReturned - principalToWithdraw;
             vault.fees += grossYield;

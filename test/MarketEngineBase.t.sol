@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {UnsafeUpgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
@@ -379,11 +379,18 @@ abstract contract MarketEngineBase is Test {
         address coreLifecycleModule,
         address rollingLifecycleModule
     ) internal {
+        dispatcher.registerModule(adminModule, keccak256(adminModule.code));
+        dispatcher.registerModule(viewModule, keccak256(viewModule.code));
+        dispatcher.registerModule(userOpsClaimsModule, keccak256(userOpsClaimsModule.code));
+        dispatcher.registerModule(coreLifecycleModule, keccak256(coreLifecycleModule.code));
+        dispatcher.registerModule(rollingLifecycleModule, keccak256(rollingLifecycleModule.code));
+
         dispatcher.setSelectorModule(bytes4(keccak256("pauseProgram(bool)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setTreasury(address)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setWorkerAuthority(address)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setDepositExecutor(address,bool)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setYieldRouter(address,uint16)")), adminModule, false);
+        dispatcher.setSelectorModule(bytes4(keccak256("resetYieldRouterFailures()")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setRateOracle(address)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setSmartDataOracle(address)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setMacroOracle(address)")), adminModule, false);

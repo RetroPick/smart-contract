@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MarketTypes} from "../types/MarketTypes.sol";
@@ -17,6 +17,15 @@ import {SettlementLogic} from "../logic/SettlementLogic.sol";
 /// still assume ERC20 semantics for Aave/4626 integration.
 // slither-disable-start uninitialized-state -- UUPS: dispatcher `initialize` sets primitives; mappings start empty
 abstract contract MarketEngineState {
+    bytes32 internal constant MODULE_STORAGE_COMPATIBILITY_ID = keccak256("retropick.marketengine.state.v1");
+    uint256 public constant MAX_BATCH_SIZE = 100;
+    uint256 internal constant MAX_USER_EPOCHS_PAGE_SIZE = 256;
+    uint64 internal constant MIN_MANUAL_DEPOSIT_WINDOW = 10;
+    uint64 internal constant MIN_MANUAL_LOCK_WINDOW = 10;
+    uint64 internal constant MAX_MANUAL_EPOCH_DURATION = 30 days;
+    uint64 internal constant MIN_ROLLING_INTERVAL_SECONDS = 10;
+    uint64 internal constant MAX_ROLLING_INTERVAL_SECONDS = 7 days;
+
     IERC20 public stakeToken;
     IPriceOracle public priceOracle;
     IPriceOracle public rateOracle;
@@ -49,10 +58,14 @@ abstract contract MarketEngineState {
         uint64 publishTime;
     }
     mapping(bytes32 templateId => mapping(bytes32 feedId => OracleCursor)) internal lastOracleCursorByTemplateFeed;
+    mapping(bytes32 templateId => mapping(bytes32 feedId => bool)) internal oracleCursorUsesRoundId;
 
     IYieldRouterV2 public yieldRouter;
     uint16 public yieldFeeBps;
     bool public lmRewardsEnabled;
+    bool public yieldRouterDisabled;
+    uint8 public yieldRouterFailureCount;
+    uint8 internal constant MAX_YIELD_ROUTER_FAILURES = 3;
     uint16 internal constant YIELD_BUFFER_BPS = 500;
 
     // --- dispatcher state (appended after legacy state) ---
@@ -111,6 +124,10 @@ abstract contract MarketEngineState {
     error YieldWithdrawFailed();
     error ModuleNotSet(bytes4 selector);
     error InvalidModule();
+    error IncompatibleModuleStorage(address module);
+    error InvalidBatchSize(uint256 requested);
+    error UnapprovedModule(address module);
+    error ModuleCodeHashMismatch(address module, bytes32 expectedCodeHash, bytes32 actualCodeHash);
     error SelectorImmutable(bytes4 selector);
     error OracleAdapterNotConfigured();
 
@@ -167,6 +184,9 @@ abstract contract MarketEngineState {
         uint64 publishTime
     );
     event YieldRouterSet(address indexed oldRouter, address indexed newRouter, uint16 yieldFeeBps);
+    event YieldRouterFailureRecorded(uint8 failureCount, bool disabled);
+    event YieldRouterDisabled();
+    event YieldRouterFailureStateReset();
     event EpochYieldAccrued(
         bytes32 indexed templateId, uint64 indexed epochId, uint256 grossYield, uint256 yieldFee, uint256 netYield
     );
@@ -187,6 +207,8 @@ abstract contract MarketEngineState {
     event DepositExecutorSet(address indexed account, bool allowed);
     event WorkerAuthorityUpdated(address indexed previousWorker, address indexed newWorker);
     event TreasuryUpdated(address indexed previousTreasury, address indexed newTreasury);
+    event ModuleRegistered(address indexed module, bytes32 indexed codeHash);
+    event ModuleRevoked(address indexed module);
     event SelectorModuleSet(bytes4 indexed selector, address indexed module, bool immutableSelector);
     event RateOracleSet(address indexed previousOracle, address indexed newOracle);
     event SmartDataOracleSet(address indexed previousOracle, address indexed newOracle);
@@ -196,6 +218,16 @@ abstract contract MarketEngineState {
     modifier onlyAdmin() {
         if (msg.sender != admin) revert Unauthorized();
         _;
+    }
+
+    /// @notice Delegatecall module compatibility marker.
+    /// @dev Dispatcher verifies this marker on module registration/runtime to reduce storage-layout mismatch risk.
+    function marketEngineStorageCompatibility() external pure returns (bytes32) {
+        return MODULE_STORAGE_COMPATIBILITY_ID;
+    }
+
+    function _validateBatchSize(uint256 n) internal pure {
+        if (n == 0 || n > MAX_BATCH_SIZE) revert InvalidBatchSize(n);
     }
 
     function templateIdFromSlug(string memory slug) public pure returns (bytes32) {

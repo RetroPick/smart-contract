@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {MarketEngineBase} from "../../MarketEngineBase.t.sol";
 import {IMarketEngine as MarketEngine} from "../../../src/engine/IMarketEngine.sol";
@@ -12,6 +12,7 @@ import {YieldRouterAaveV3} from "../../../src/yield/YieldRouterAaveV3.sol";
 /// @notice Rolling oracle and timing: buffers, confidence, early calls, batch.
 contract MarketEngineRollingOracleTest is MarketEngineBase {
     uint64 internal constant INTER = 100;
+    uint256 internal constant OVERSIZED_BATCH = 101;
 
     function test_rolling_allows_chainlink_style_publishTime_before_lock_and_resolve() public {
         vm.startPrank(admin);
@@ -112,6 +113,31 @@ contract MarketEngineRollingOracleTest is MarketEngineBase {
         (MarketTypes.RollingPhase phase, MarketTypes.RollingHaltReason reason,,,,) = engine.getRollingLifecycle(tid);
         assertEq(uint8(phase), uint8(MarketTypes.RollingPhase.Halted));
         assertEq(uint8(reason), uint8(MarketTypes.RollingHaltReason.OracleConfidenceWide));
+    }
+
+    function test_rolling_small_price_confidence_floor_does_not_halt() public {
+        vm.startPrank(admin);
+        MarketEngine.UpsertTemplateParams memory p = _directionRollingTemplate("conf_small_ok", INTER, 10);
+        p.oracleMaxConfidenceBps = 500; // 5%
+        engine.upsertTemplate(p);
+        bytes32 tid = _tid("conf_small_ok");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 425_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.genesisStartRolling(tid);
+
+        vm.warp(t0 + INTER);
+        // Small price (100) with confidence (10): old logic halted since 10 > 5.
+        oracle.set(feed, 100, t0 + INTER, 10);
+        vm.prank(worker);
+        engine.genesisLockRolling(tid);
+
+        (MarketTypes.RollingPhase phase, MarketTypes.RollingHaltReason reason,,,,) = engine.getRollingLifecycle(tid);
+        assertEq(uint8(phase), uint8(MarketTypes.RollingPhase.Live));
+        assertEq(uint8(reason), uint8(MarketTypes.RollingHaltReason.NoneReason));
     }
 
     function test_rolling_execute_confidence_wide_halts() public {
@@ -258,6 +284,13 @@ contract MarketEngineRollingOracleTest is MarketEngineBase {
         assertEq(lrB, 1);
     }
 
+    function test_rolling_execute_round_batch_reverts_on_oversized_batch() public {
+        bytes32[] memory ids = new bytes32[](OVERSIZED_BATCH);
+        vm.prank(worker);
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("InvalidBatchSize(uint256)")), OVERSIZED_BATCH));
+        engine.executeRollingRoundBatch(ids);
+    }
+
     function test_rolling_execute_halts_when_yield_withdraw_fails() public {
         vm.startPrank(admin);
         engine.upsertTemplate(_directionRollingTemplate("roll_withdraw_fail", INTER, 10));
@@ -300,5 +333,17 @@ contract MarketEngineRollingOracleTest is MarketEngineBase {
         (MarketTypes.RollingPhase phase, MarketTypes.RollingHaltReason reason,,,,) = engine.getRollingLifecycle(tid);
         assertEq(uint8(phase), uint8(MarketTypes.RollingPhase.Halted));
         assertEq(uint8(reason), uint8(MarketTypes.RollingHaltReason.OracleFailure));
+    }
+
+    function test_rolling_genesis_reverts_when_interval_too_small() public {
+        vm.startPrank(admin);
+        engine.upsertTemplate(_directionRollingTemplate("roll-small-inter", 5, 1));
+        bytes32 tid = _tid("roll-small-inter");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        vm.prank(worker);
+        vm.expectRevert(bytes4(keccak256("RollingInvalidParams()")));
+        engine.genesisStartRolling(tid);
     }
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {UnsafeUpgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
@@ -9,12 +9,14 @@ import {MarketTypes} from "../../../src/types/MarketTypes.sol";
 import {MockERC20} from "../../../src/test/MockERC20.sol";
 import {MockPriceOracle} from "../../../src/test/MockPriceOracle.sol";
 import {MockDispatcherModule} from "../../../src/test/MockDispatcherModule.sol";
+import {MockNonCompliantModule} from "../../../src/test/MockNonCompliantModule.sol";
 import {MarketEngineState} from "../../../src/engine/MarketEngineState.sol";
 
 contract MarketEngineDispatcherTest is Test {
     MockERC20 internal token;
     MockPriceOracle internal oracle;
     MockDispatcherModule internal module;
+    MockNonCompliantModule internal nonCompliantModule;
     MarketEngineDispatcher internal engine;
 
     address internal admin = makeAddr("admin");
@@ -25,6 +27,7 @@ contract MarketEngineDispatcherTest is Test {
         token = new MockERC20();
         oracle = new MockPriceOracle();
         module = new MockDispatcherModule();
+        nonCompliantModule = new MockNonCompliantModule();
 
         MarketEngineDispatcher impl = new MarketEngineDispatcher();
         address proxy = UnsafeUpgrades.deployUUPSProxy(
@@ -49,7 +52,13 @@ contract MarketEngineDispatcherTest is Test {
         engine = MarketEngineDispatcher(payable(proxy));
     }
 
+    function _registerMockModule() internal {
+        vm.prank(admin);
+        engine.registerModule(address(module), keccak256(address(module).code));
+    }
+
     function test_AdminCanSetSelectorModuleAndDelegateCall() public {
+        _registerMockModule();
         vm.prank(admin);
         engine.setSelectorModule(bytes4(keccak256("pauseProgram(bool)")), address(module), false);
 
@@ -60,6 +69,7 @@ contract MarketEngineDispatcherTest is Test {
     }
 
     function test_RejectRootOwnedSelectorRegistration() public {
+        _registerMockModule();
         vm.prank(admin);
         bytes4 initSelector = bytes4(
             keccak256("initialize((address,address,address,address,address,uint16,uint16,uint8,uint8,uint64,uint16))")
@@ -69,6 +79,7 @@ contract MarketEngineDispatcherTest is Test {
     }
 
     function test_ImmutableSelectorCannotBeReplaced() public {
+        _registerMockModule();
         bytes4 selector = bytes4(keccak256("setTreasury(address)"));
         vm.startPrank(admin);
         engine.setSelectorModule(selector, address(module), true);
@@ -89,9 +100,14 @@ contract MarketEngineDispatcherTest is Test {
         vm.prank(admin);
         vm.expectRevert(MarketEngineState.InvalidModule.selector);
         engine.setSelectorModule(selector, makeAddr("eoa"), false);
+
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(MarketEngineState.UnapprovedModule.selector, address(module)));
+        engine.setSelectorModule(selector, address(module), false);
     }
 
     function test_getSelectorModule_returns_set_values() public {
+        _registerMockModule();
         bytes4 selector = bytes4(keccak256("pauseProgram(bool)"));
         vm.prank(admin);
         engine.setSelectorModule(selector, address(module), true);
@@ -110,5 +126,47 @@ contract MarketEngineDispatcherTest is Test {
             errSel := mload(add(ret, 0x20))
         }
         assertEq(errSel, MarketEngineState.ModuleNotSet.selector);
+    }
+
+    function test_registerModule_reverts_on_codehash_mismatch() public {
+        bytes32 wrongHash = keccak256("wrong");
+        bytes32 actualHash = keccak256(address(module).code);
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MarketEngineState.ModuleCodeHashMismatch.selector, address(module), wrongHash, actualHash
+            )
+        );
+        engine.registerModule(address(module), wrongHash);
+    }
+
+    function test_registerModule_reverts_for_storage_incompatible_module() public {
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MarketEngineState.IncompatibleModuleStorage.selector, address(nonCompliantModule)
+            )
+        );
+        engine.registerModule(address(nonCompliantModule), keccak256(address(nonCompliantModule).code));
+    }
+
+    function test_revokeModule_blocks_delegatecall_path() public {
+        bytes4 selector = bytes4(keccak256("pauseProgram(bool)"));
+        _registerMockModule();
+
+        vm.prank(admin);
+        engine.setSelectorModule(selector, address(module), false);
+
+        vm.prank(admin);
+        engine.revokeModule(address(module));
+
+        vm.prank(admin);
+        (bool ok, bytes memory ret) = address(engine).call(abi.encodeWithSignature("pauseProgram(bool)", true));
+        assertFalse(ok);
+        bytes4 errSel;
+        assembly {
+            errSel := mload(add(ret, 0x20))
+        }
+        assertEq(errSel, MarketEngineState.UnapprovedModule.selector);
     }
 }

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {MarketEngineBase} from "../../MarketEngineBase.t.sol";
 import {IMarketEngine as MarketEngine} from "../../../src/engine/IMarketEngine.sol";
 import {MarketTypes} from "../../../src/types/MarketTypes.sol";
 
 contract MarketEngineCoreLifecycleBranchesTest is MarketEngineBase {
+    uint256 private constant OVERSIZED_BATCH = 101;
+
     function test_upsertTemplate_revertsForEmptyAndTooLongFields() public {
         MarketEngine.UpsertTemplateParams memory p = _defaultThresholdTemplate("ok");
         p.slug = "";
@@ -56,6 +58,18 @@ contract MarketEngineCoreLifecycleBranchesTest is MarketEngineBase {
         engine.openEpochsBatch(ids, epochIds, opens, locks, resolves);
     }
 
+    function test_openEpochsBatch_reverts_on_oversized_batch() public {
+        bytes32[] memory ids = new bytes32[](OVERSIZED_BATCH);
+        uint64[] memory epochIds = new uint64[](OVERSIZED_BATCH);
+        uint64[] memory opens = new uint64[](OVERSIZED_BATCH);
+        uint64[] memory locks = new uint64[](OVERSIZED_BATCH);
+        uint64[] memory resolves = new uint64[](OVERSIZED_BATCH);
+
+        vm.prank(worker);
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("InvalidBatchSize(uint256)")), OVERSIZED_BATCH));
+        engine.openEpochsBatch(ids, epochIds, opens, locks, resolves);
+    }
+
     function test_lockEpochsBatch_revertsOnLengthMismatch() public {
         vm.startPrank(admin);
         engine.upsertTemplate(_defaultThresholdTemplate("b-lock"));
@@ -76,6 +90,15 @@ contract MarketEngineCoreLifecycleBranchesTest is MarketEngineBase {
 
         vm.prank(worker);
         vm.expectRevert(bytes4(keccak256("InvalidTemplate()")));
+        engine.lockEpochsBatch(ids, epochIds);
+    }
+
+    function test_lockEpochsBatch_reverts_on_oversized_batch() public {
+        bytes32[] memory ids = new bytes32[](OVERSIZED_BATCH);
+        uint64[] memory epochIds = new uint64[](OVERSIZED_BATCH);
+
+        vm.prank(worker);
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("InvalidBatchSize(uint256)")), OVERSIZED_BATCH));
         engine.lockEpochsBatch(ids, epochIds);
     }
 
@@ -102,6 +125,15 @@ contract MarketEngineCoreLifecycleBranchesTest is MarketEngineBase {
 
         vm.prank(worker);
         vm.expectRevert(bytes4(keccak256("InvalidTemplate()")));
+        engine.resolveEpochsBatch(ids, epochIds);
+    }
+
+    function test_resolveEpochsBatch_reverts_on_oversized_batch() public {
+        bytes32[] memory ids = new bytes32[](OVERSIZED_BATCH);
+        uint64[] memory epochIds = new uint64[](OVERSIZED_BATCH);
+
+        vm.prank(worker);
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("InvalidBatchSize(uint256)")), OVERSIZED_BATCH));
         engine.resolveEpochsBatch(ids, epochIds);
     }
 
@@ -192,5 +224,61 @@ contract MarketEngineCoreLifecycleBranchesTest is MarketEngineBase {
         vm.prank(worker);
         vm.expectRevert(bytes4(keccak256("InvalidEpochState()")));
         engine.cancelEpoch(tid, 1, MarketTypes.CancelReason.ManualAdminCancel, false);
+    }
+
+    function test_openEpoch_reverts_when_lock_time_is_not_in_future() public {
+        vm.startPrank(admin);
+        engine.upsertTemplate(_defaultThresholdTemplate("timing-past-lock"));
+        bytes32 tid = _tid("timing-past-lock");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 100_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        vm.expectRevert(bytes4(keccak256("InvalidTiming()")));
+        engine.openEpoch(tid, 1, t0 - 20, t0, t0 + 10);
+    }
+
+    function test_openEpoch_reverts_when_deposit_window_too_short() public {
+        vm.startPrank(admin);
+        engine.upsertTemplate(_defaultThresholdTemplate("timing-short-deposit"));
+        bytes32 tid = _tid("timing-short-deposit");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 100_100;
+        vm.warp(t0);
+        vm.prank(worker);
+        vm.expectRevert(bytes4(keccak256("InvalidTiming()")));
+        engine.openEpoch(tid, 1, t0 + 1, t0 + 9, t0 + 30);
+    }
+
+    function test_openEpoch_reverts_when_lock_window_too_short() public {
+        vm.startPrank(admin);
+        engine.upsertTemplate(_defaultThresholdTemplate("timing-short-lock"));
+        bytes32 tid = _tid("timing-short-lock");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 100_200;
+        vm.warp(t0);
+        vm.prank(worker);
+        vm.expectRevert(bytes4(keccak256("InvalidTiming()")));
+        engine.openEpoch(tid, 1, t0 + 10, t0 + 20, t0 + 29);
+    }
+
+    function test_openEpoch_reverts_when_epoch_duration_too_long() public {
+        vm.startPrank(admin);
+        engine.upsertTemplate(_defaultThresholdTemplate("timing-too-long"));
+        bytes32 tid = _tid("timing-too-long");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 100_300;
+        vm.warp(t0);
+        vm.prank(worker);
+        vm.expectRevert(bytes4(keccak256("InvalidTiming()")));
+        engine.openEpoch(tid, 1, t0 + 10, t0 + 20, t0 + uint64(31 days));
     }
 }

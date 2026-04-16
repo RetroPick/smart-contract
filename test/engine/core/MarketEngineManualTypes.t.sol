@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {MarketEngineBase} from "../../MarketEngineBase.t.sol";
 import {IMarketEngine as MarketEngine} from "../../../src/engine/IMarketEngine.sol";
@@ -150,6 +150,37 @@ contract MarketEngineManualTypesTest is MarketEngineBase {
         uint256 beforeBal = token.balanceOf(address(this));
         engine.claim(tid, 1);
         assertGt(token.balanceOf(address(this)), beforeBal);
+    }
+
+    function test_manual_direction_small_price_accepts_absolute_confidence_floor() public {
+        vm.startPrank(admin);
+        MarketEngine.UpsertTemplateParams memory p = _directionManualTemplate("dir_small_conf");
+        p.oracleMaxConfidenceBps = 500; // 5%
+        engine.upsertTemplate(p);
+        bytes32 tid = _tid("dir_small_conf");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 925_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.openEpoch(tid, 1, t0 + 100, t0 + 200, t0 + 300);
+
+        token.mint(address(this), 1e24);
+        token.approve(address(engine), type(uint256).max);
+        vm.warp(t0 + 150);
+        engine.depositToSide(tid, 1, 0, 500e18);
+
+        // Small price (100) with confidence (10): old logic reverted because 10 > (100*500/10000)=5.
+        vm.warp(t0 + 200);
+        oracle.set(feed, 100, uint64(t0 + 200), 10);
+        vm.prank(worker);
+        engine.lockEpoch(tid, 1);
+
+        vm.warp(t0 + 300);
+        oracle.set(feed, 120, uint64(t0 + 300), 10);
+        vm.prank(worker);
+        engine.resolveEpoch(tid, 1);
     }
 
     function test_manual_range_close_full_lifecycle_claim() public {

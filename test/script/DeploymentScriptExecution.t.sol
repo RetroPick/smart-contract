@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
@@ -183,9 +183,7 @@ contract DeploymentScriptExecutionTest is Test {
         vm.setEnv("MAX_OUTCOMES", "8");
         vm.setEnv("ORACLE_MAX_DELAY_SECONDS", "3600");
         vm.setEnv("ORACLE_MAX_CONFIDENCE_BPS", "500");
-        if (stakeToken != address(0)) {
-            vm.setEnv("STAKE_TOKEN", vm.toString(stakeToken));
-        }
+        vm.setEnv("STAKE_TOKEN", vm.toString(stakeToken));
     }
 
     function _topicAddress(bytes32 topic) internal pure returns (address) {

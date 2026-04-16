@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import {MarketEngineState} from "../MarketEngineState.sol";
 import {MarketTypes} from "../../types/MarketTypes.sol";
@@ -138,6 +138,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
         if (globalPaused) revert ProtocolPaused();
         uint256 n = templateIds.length;
+        _validateBatchSize(n);
         if (!(n == epochIds.length && n == openAt.length && n == lockAt.length && n == resolveAt.length)) {
             revert InvalidTemplate();
         }
@@ -156,6 +157,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
         if (globalPaused) revert ProtocolPaused();
         uint256 n = templateIds.length;
+        _validateBatchSize(n);
         if (n != epochIds.length) revert InvalidTemplate();
         for (uint256 i = 0; i < n; i++) {
             _lockEpoch(templateIds[i], epochIds[i]);
@@ -172,6 +174,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
         if (globalPaused) revert ProtocolPaused();
         uint256 n = templateIds.length;
+        _validateBatchSize(n);
         if (n != epochIds.length) revert InvalidTemplate();
         for (uint256 i = 0; i < n; i++) {
             _resolveEpoch(templateIds[i], epochIds[i]);
@@ -202,10 +205,11 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         }
 
         IYieldRouterV2 r = yieldRouter;
-        if (address(r) != address(0) && e.totalPool > 0) {
-            uint256 routedPrincipal = (e.totalPool * uint256(10_000 - YIELD_BUFFER_BPS)) / 10_000;
+        if (address(r) != address(0) && e.routedPrincipal > 0) {
+            uint256 routedPrincipal = e.routedPrincipal;
             if (routedPrincipal > 0) {
                 try r.withdrawScaled(templateId, routedPrincipal) returns (uint256 grossReturned) {
+                    e.routedPrincipal = 0;
                     if (grossReturned > routedPrincipal) {
                         uint256 grossYield = grossReturned - routedPrincipal;
                         _vaults[templateId].fees += grossYield;
@@ -242,6 +246,11 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
     function _openEpoch(bytes32 templateId, uint64 epochId, uint64 openAt, uint64 lockAt, uint64 resolveAt) internal {
         if (_templates[templateId].executionMode == MarketTypes.ExecutionMode.Rolling) revert ManualModeOnly();
         if (!(openAt < lockAt && lockAt < resolveAt)) revert InvalidTiming();
+        uint64 nowTs = uint64(block.timestamp);
+        if (lockAt <= nowTs) revert InvalidTiming();
+        if (lockAt - openAt < MIN_MANUAL_DEPOSIT_WINDOW) revert InvalidTiming();
+        if (resolveAt - lockAt < MIN_MANUAL_LOCK_WINDOW) revert InvalidTiming();
+        if (resolveAt - openAt > MAX_MANUAL_EPOCH_DURATION) revert InvalidTiming();
         MarketTypes.Template storage t = _templates[templateId];
         if (t.version == 0) revert InvalidTemplate();
         if (!t.active) revert TemplateInactive();
@@ -251,7 +260,6 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         MarketTypes.Epoch storage e = _epochs[templateId][epochId];
         if (e.exists) revert EpochAlreadyExists();
 
-        uint64 nowTs = uint64(block.timestamp);
         e.version = MarketTypes.VERSION;
         e.status = MarketTypes.EpochStatus.Open;
         e.cancelReason = MarketTypes.CancelReason.NoneReason;
@@ -440,7 +448,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
             valueE8: priceE8, publishTime: publishTime, confidenceE8: _toConf128(confidenceE8), written: true
         });
 
-        uint256 grossYield = _withdrawRoutedPrincipalOnResolve(templateId, epochId, e.totalPool);
+        uint256 grossYield = _withdrawRoutedPrincipalOnResolve(templateId, epochId);
         (uint256 yieldFee, uint256 netYield) = _applyGrossYield(templateId, ledger, grossYield);
 
         SettlementLogic.Outputs memory outputs = SettlementLogic.compute(e, netYield);
@@ -480,23 +488,37 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         }
     }
 
-    function _withdrawRoutedPrincipalOnResolve(bytes32 templateId, uint64 epochId, uint256 totalPool)
+    function _withdrawRoutedPrincipalOnResolve(bytes32 templateId, uint64 epochId)
         internal
         returns (uint256 grossYield)
     {
         IYieldRouterV2 r = yieldRouter;
-        if (address(r) == address(0) || totalPool < 1) return 0;
+        if (address(r) == address(0) || yieldRouterDisabled) return 0;
 
-        uint256 routedPrincipal = (totalPool * uint256(10_000 - YIELD_BUFFER_BPS)) / 10_000;
+        MarketTypes.Epoch storage e = _epochs[templateId][epochId];
+        uint256 routedPrincipal = e.routedPrincipal;
         if (routedPrincipal < 1) return 0;
 
         try r.withdrawScaled(templateId, routedPrincipal) returns (uint256 grossReturned) {
+            e.routedPrincipal = 0;
             if (grossReturned > routedPrincipal) return grossReturned - routedPrincipal;
             return 0;
         } catch {
             emit YieldRouterWithdrawFailed(templateId, epochId, routedPrincipal);
-            revert YieldWithdrawFailed();
+            _recordYieldRouterFailure();
+            return 0;
         }
+    }
+
+    function _recordYieldRouterFailure() internal {
+        if (yieldRouterFailureCount < MAX_YIELD_ROUTER_FAILURES) {
+            yieldRouterFailureCount += 1;
+        }
+        if (!yieldRouterDisabled && yieldRouterFailureCount >= MAX_YIELD_ROUTER_FAILURES) {
+            yieldRouterDisabled = true;
+            emit YieldRouterDisabled();
+        }
+        emit YieldRouterFailureRecorded(yieldRouterFailureCount, yieldRouterDisabled);
     }
 
     function _applyGrossYield(bytes32 templateId, MarketTypes.Ledger storage ledger, uint256 grossYield)
@@ -508,7 +530,10 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         _vaults[templateId].active += grossYield;
         ledger.increaseActiveCollateral(grossYield);
 
-        yieldFee = (grossYield * uint256(yieldFeeBps)) / 10_000;
+        uint256 bps = uint256(yieldFeeBps);
+        uint256 q = grossYield / 10_000;
+        uint256 r = grossYield % 10_000;
+        yieldFee = (q * bps) + ((r * bps) / 10_000);
         netYield = grossYield - yieldFee;
         if (yieldFee > 0) {
             _vaults[templateId].active -= yieldFee;
@@ -561,14 +586,8 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         pure
         returns (bool)
     {
-        uint256 abs;
-        assembly {
-            abs := priceE8
-            if slt(priceE8, 0) { abs := sub(0, priceE8) }
-        }
-        // slither-disable-next-line incorrect-equality -- detects `type(int256).min` (no positive absolute value in int256).
-        if (abs == (1 << 255)) revert InvalidOraclePrice();
-        uint256 limit = (abs * uint256(maxConfidenceBps)) / 10_000;
+        if (priceE8 == type(int256).min) revert InvalidOraclePrice();
+        uint256 limit = MarketTypes.confidenceLimitE8(priceE8, maxConfidenceBps, MarketTypes.MIN_ABSOLUTE_CONFIDENCE_E8);
         return confidenceE8 <= limit;
     }
 
@@ -621,30 +640,43 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
             .getNormalizedPriceWithRoundId(feedId, maxDelay, nowTs) returns (
             uint80 rid, int256 p, uint64 pt, uint256 c
         ) {
-            _enforceAndUpdateOracleCursor(templateId, feedId, rid, pt);
+            _enforceAndUpdateOracleCursor(templateId, feedId, rid, pt, true);
             return (p, pt, c, rid);
         } catch {
             (priceE8, publishTime, confidenceE8) =
                 _resolveOracleByClass(oracleClass).getNormalizedPrice(feedId, maxDelay, nowTs);
-            _enforceAndUpdateOracleCursor(templateId, feedId, 0, publishTime);
+            _enforceAndUpdateOracleCursor(templateId, feedId, 0, publishTime, false);
             return (priceE8, publishTime, confidenceE8, 0);
         }
     }
 
-    function _enforceAndUpdateOracleCursor(bytes32 templateId, bytes32 feedId, uint80 oracleRoundId, uint64 publishTime)
-        internal
-    {
+    function _enforceAndUpdateOracleCursor(
+        bytes32 templateId,
+        bytes32 feedId,
+        uint80 oracleRoundId,
+        uint64 publishTime,
+        bool supportsRoundId
+    ) internal {
         OracleCursor storage c = lastOracleCursorByTemplateFeed[templateId][feedId];
-        if (oracleRoundId < c.roundId) {
+        bool priorUsesRoundId = oracleCursorUsesRoundId[templateId][feedId];
+
+        // Prevent cursor mode downgrades/upgrades after initialization; switching source semantics can bypass monotonicity.
+        if (c.publishTime != 0 && priorUsesRoundId != supportsRoundId) {
+            revert InvalidOracleFeed();
+        }
+        if (supportsRoundId && oracleRoundId == 0) {
+            revert InvalidOracleFeed();
+        }
+        if (supportsRoundId && oracleRoundId < c.roundId) {
             revert OracleSampleNotMonotonic(oracleRoundId, c.roundId, publishTime, c.publishTime);
         }
-        // slither-disable-next-line incorrect-equality -- same round id must not move publish time backwards.
-        if (oracleRoundId == c.roundId && publishTime < c.publishTime) {
+        if (publishTime < c.publishTime) {
             revert OracleSampleNotMonotonic(oracleRoundId, c.roundId, publishTime, c.publishTime);
         }
-        c.roundId = oracleRoundId;
+        c.roundId = supportsRoundId ? oracleRoundId : 0;
         c.publishTime = publishTime;
-        if (oracleRoundId > lastOracleRoundIdByTemplate[templateId]) {
+        oracleCursorUsesRoundId[templateId][feedId] = supportsRoundId;
+        if (supportsRoundId && oracleRoundId > lastOracleRoundIdByTemplate[templateId]) {
             lastOracleRoundIdByTemplate[templateId] = oracleRoundId;
         }
     }
