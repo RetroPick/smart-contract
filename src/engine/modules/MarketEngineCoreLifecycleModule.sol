@@ -722,6 +722,22 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
                 t.marketType == MarketTypes.MarketType.Composite
                     && (t.compositeFeedCount < 2 || t.compositeFeedCount > 4 || t.compositeFeedIds[0] == bytes32(0))
             ) revert InvalidTemplate();
+        } else if (t.marketType == MarketTypes.MarketType.Cascade) {
+            if (t.outcomeCount < 2) revert InvalidTemplate();
+            uint256 maxLevels = uint256(t.outcomeCount) - 1;
+            for (uint256 i = 1; i < maxLevels; i++) {
+                if (t.cascadeDownward) {
+                    if (!(t.rangeBoundsE8[i] < t.rangeBoundsE8[i - 1])) revert InvalidTemplate();
+                } else {
+                    if (!(t.rangeBoundsE8[i - 1] < t.rangeBoundsE8[i])) revert InvalidTemplate();
+                }
+            }
+        } else if (t.marketType == MarketTypes.MarketType.Corridor) {
+            if (t.outcomeCount < 2) revert InvalidTemplate();
+            if (!(t.rangeBoundsE8[0] < t.rangeBoundsE8[1])) revert InvalidTemplate();
+            for (uint256 i = 2; i < uint256(t.outcomeCount) - 1; i++) {
+                if (!(t.rangeBoundsE8[i - 1] < t.rangeBoundsE8[i])) revert InvalidTemplate();
+            }
         } else {
             if (t.outcomeCount < 2) revert InvalidTemplate();
             for (uint256 i = 1; i < uint256(t.outcomeCount) - 1; i++) {

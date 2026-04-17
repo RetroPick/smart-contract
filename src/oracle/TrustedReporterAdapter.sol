@@ -10,6 +10,10 @@ import {IEventOracle} from "../interfaces/IEventOracle.sol";
 
 /// @title TrustedReporterAdapter
 /// @notice EIP-712–signed lock and resolve samples from a single whitelisted reporter key.
+/// @dev **Trust / centralization:** One `trustedReporter` key attests all payloads for this adapter. Key compromise
+///      or unavailability affects every template that points here; on-chain there is no quorum or fallback—only
+///      `owner` rotation (`setTrustedReporter`) and engine-level pause / template governance. Stronger guarantees
+///      (threshold signatures, timelocked rotation, dispute games) require a different oracle module or upgrade.
 contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
     bytes32 private constant LOCK_CLAIM_TYPEHASH = keccak256(
         "LockClaim(bytes32 marketId,int256 valueE8,uint64 observedAt,bytes32 dataSourceHash)"
@@ -57,6 +61,7 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
     error SignatureTooOld();
     error ObservedAtInFuture();
     error MaxAgeOutOfRange();
+    error InvalidOhlc();
 
     constructor(address initialReporter, address initialOwner, uint256 initialMaxSignatureAgeSeconds)
         EIP712("RetroPickTrustedReporter", "1")
@@ -97,6 +102,7 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
         bytes32 dataSourceHash,
         bytes calldata signature
     ) external {
+        if (_ohlcSamples[marketId].written) revert AlreadyResolved();
         Sample storage s = _resolveSamples[marketId];
         if (s.written) revert AlreadyResolved();
         _verifyAndStoreSample(RESOLVE_CLAIM_TYPEHASH, s, marketId, valueE8, observedAt, dataSourceHash, signature);
@@ -112,12 +118,14 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
         bytes32 dataSourceHash,
         bytes calldata signature
     ) external {
+        if (_resolveSamples[marketId].written) revert AlreadyResolved();
         OhlcSample storage s = _ohlcSamples[marketId];
         if (s.written) revert AlreadyResolved();
         if (observedAt > block.timestamp) revert ObservedAtInFuture();
         unchecked {
             if (block.timestamp - uint256(observedAt) > maxSignatureAgeSeconds) revert SignatureTooOld();
         }
+        if (highE8 < lowE8 || closeE8 < lowE8 || closeE8 > highE8) revert InvalidOhlc();
         bytes32 structHash =
             keccak256(abi.encode(OHLC_CLAIM_TYPEHASH, marketId, highE8, lowE8, closeE8, observedAt, dataSourceHash));
         bytes32 digest = _hashTypedDataV4(structHash);
@@ -142,6 +150,8 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
         delete _resolveSamples[marketId];
     }
 
+    /// @dev OHLC and scalar resolve are mutually exclusive: posting one forbids the other for the same `marketId`.
+    /// When OHLC exists, `getResult` returns its close; otherwise the signed resolve value.
     function getResult(bytes32 marketId) external view override returns (int256 result, bool resolved) {
         OhlcSample storage ohlc = _ohlcSamples[marketId];
         if (ohlc.written) return (ohlc.closeE8, true);
@@ -182,6 +192,20 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
     {
         return _hashTypedDataV4(
             keccak256(abi.encode(RESOLVE_CLAIM_TYPEHASH, marketId, valueE8, observedAt, dataSourceHash))
+        );
+    }
+
+    /// @notice EIP-712 digest the trusted reporter signs for `postOhlcResult`.
+    function hashOhlcClaim(
+        bytes32 marketId,
+        int256 highE8,
+        int256 lowE8,
+        int256 closeE8,
+        uint64 observedAt,
+        bytes32 dataSourceHash
+    ) external view returns (bytes32) {
+        return _hashTypedDataV4(
+            keccak256(abi.encode(OHLC_CLAIM_TYPEHASH, marketId, highE8, lowE8, closeE8, observedAt, dataSourceHash))
         );
     }
 

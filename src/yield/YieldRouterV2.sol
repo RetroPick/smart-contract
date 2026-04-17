@@ -29,7 +29,8 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
     IERC4626 public immutable STATA_TOKEN;
     address public immutable ENGINE;
 
-    /// @notice Total scaled aToken units held across all AToken-path templates (matches `scaledBalanceOf` when only AToken path is used).
+    /// @notice Cached total scaled aToken balance for this router (`scaledBalanceOf` on `A_TOKEN`) after each mutating AToken-path or Stata-path op.
+    /// @dev Do not treat as a live oracle across blocks — prefer `IScaledBalanceToken(A_TOKEN).scaledBalanceOf(address(this))` for authoritative reads.
     uint256 public globalScaledBalance;
 
     struct TemplateYield {
@@ -110,20 +111,20 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
         onlyEngine
         returns (uint256 grossAmount)
     {
-        return _withdrawScaled(templateId, principalAmount);
+        return _withdrawScaled(templateId, principalAmount, false);
     }
 
     function balanceOf(bytes32 templateId) external view override returns (uint256) {
         return currentValueOf(templateId);
     }
 
+    /// @notice Full unwind for `templateId`. Skips `ReservePaused` checks so funds can exit if Aave gates normal withdrawals.
     function emergencyWithdraw(bytes32 templateId) external override returns (uint256 grossAmount) {
         if (msg.sender != ENGINE && msg.sender != owner()) revert Unauthorized();
         TemplateYield storage t = _templates[templateId];
         uint256 p = t.principal;
         if (p == 0) return 0;
-        // Full template unwind (per-template accounting); never use pool max-withdraw for multi-template safety.
-        grossAmount = _withdrawScaled(templateId, p);
+        grossAmount = _withdrawScaled(templateId, p, true);
         emit EmergencyWithdrawV2(templateId, grossAmount);
     }
 
@@ -149,7 +150,7 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
         onlyEngine
         returns (uint256 grossAmount)
     {
-        return _withdrawScaled(templateId, principalAmount);
+        return _withdrawScaled(templateId, principalAmount, false);
     }
 
     // slither-disable-next-line reentrancy-no-eth -- `onlyEngine`; Aave/ERC-4626 do not reenter this contract; CEI would mis-account shares vs actual balances.
@@ -164,6 +165,7 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
             uint256 shares = STATA_TOKEN.deposit(amount, address(this));
             t.principal += amount;
             t.stataShares += shares;
+            globalScaledBalance = IScaledBalanceToken(address(A_TOKEN)).scaledBalanceOf(address(this));
             emit YieldDepositedStata(templateId, amount, shares);
             return shares;
         }
@@ -182,7 +184,7 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
     }
 
     // slither-disable-next-line reentrancy-no-eth -- `onlyEngine`; pool redeem/withdraw does not reenter; state follows actual burned shares.
-    function _withdrawScaled(bytes32 templateId, uint256 principalAmount) internal returns (uint256 grossAmount) {
+    function _withdrawScaled(bytes32 templateId, uint256 principalAmount, bool emergency) internal returns (uint256 grossAmount) {
         if (principalAmount == 0) revert ZeroAmount();
         TemplateYield storage t = _templates[templateId];
         uint256 p = t.principal;
@@ -190,23 +192,24 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
 
         if (t.path == IYieldRouterV2.YieldPath.StataToken) {
             if (address(STATA_TOKEN) == address(0)) revert StataNotConfigured();
-            _requireReserveWithdrawable();
+            if (!emergency) _requireReserveWithdrawable();
             uint256 sharesTotal = t.stataShares;
             if (sharesTotal == 0) revert OverWithdraw();
             uint256 totalAssets = STATA_TOKEN.convertToAssets(sharesTotal);
             uint256 underlyingRequest = principalAmount == p
                 ? totalAssets
                 : Math.mulDiv(totalAssets, principalAmount, p, Math.Rounding.Floor);
-            uint256 sharesToRedeem = principalAmount == p ? sharesTotal : STATA_TOKEN.convertToShares(underlyingRequest);
+            uint256 sharesToRedeem = principalAmount == p ? sharesTotal : STATA_TOKEN.previewWithdraw(underlyingRequest);
             if (sharesToRedeem > sharesTotal) sharesToRedeem = sharesTotal;
             grossAmount = STATA_TOKEN.redeem(sharesToRedeem, ENGINE, address(this));
             t.stataShares = sharesTotal - sharesToRedeem;
             t.principal = p - principalAmount;
+            globalScaledBalance = IScaledBalanceToken(address(A_TOKEN)).scaledBalanceOf(address(this));
             emit YieldWithdrawnStata(templateId, principalAmount, sharesToRedeem, grossAmount);
             return grossAmount;
         }
 
-        _requireReserveWithdrawable();
+        if (!emergency) _requireReserveWithdrawable();
         uint256 s = t.scaledPrincipal;
         if (s == 0) revert OverWithdraw();
         uint256 idx = AAVE_POOL.getReserveNormalizedIncome(address(STAKE_TOKEN));
@@ -310,6 +313,9 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
 
     // --- internals ---
 
+    /// @dev Reads `ReserveConfigurationMap.data` bit layout from Aave v3 core `ReserveConfiguration` (v3.0.x+):
+    ///      `LIQUIDITY_INDEX`… offsets; active/frozen/paused flags at bits 56, 57, 60 per deployed Pool revision.
+    ///      If integrating a fork with a different layout, replace with that pool’s supported getters.
     function _requireReserveHealthy() internal view {
         ReserveConfigurationMap memory cfg = AAVE_POOL.getConfiguration(address(STAKE_TOKEN));
         uint256 data = cfg.data;
@@ -325,9 +331,9 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
         if (isPaused) revert ReservePaused();
     }
 
-    /// @notice Rescue stray ERC20 (not aToken).
+    /// @notice Rescue stray ERC20 (not collateral underlying or aToken).
     function rescueToken(address token, address to, uint256 amount) external onlyOwner {
-        if (token == address(A_TOKEN)) revert InvalidAddress();
+        if (token == address(A_TOKEN) || token == address(STAKE_TOKEN)) revert InvalidAddress();
         IERC20(token).safeTransfer(to, amount);
     }
 }

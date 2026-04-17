@@ -39,6 +39,19 @@ contract TrustedReporterAdapterTest is Test {
         return abi.encodePacked(r, s, v);
     }
 
+    function _signOhlc(
+        bytes32 marketId,
+        int256 highE8,
+        int256 lowE8,
+        int256 closeE8,
+        uint64 observedAt,
+        bytes32 dataSourceHash
+    ) internal view returns (bytes memory) {
+        bytes32 digest = adapter.hashOhlcClaim(marketId, highE8, lowE8, closeE8, observedAt, dataSourceHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(REPORTER_PK, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
     function test_postResolve_happyPath() public {
         uint64 t = uint64(block.timestamp);
         bytes32 ds = keccak256("https://example.com/source");
@@ -75,6 +88,25 @@ contract TrustedReporterAdapterTest is Test {
 
         vm.expectRevert(TrustedReporterAdapter.AlreadyResolved.selector);
         adapter.postResolveResult(MARKET, 2, t, ds, sig);
+    }
+
+    function test_RevertWhen_ohlcAfterResolve() public {
+        uint64 t = uint64(block.timestamp);
+        bytes32 ds = keccak256("x");
+        adapter.postResolveResult(MARKET, 50e8, t, ds, _signResolve(MARKET, 50e8, t, ds));
+        bytes memory ohlcSig = _signOhlc(MARKET, 10e8, 5e8, 7e8, t, ds);
+        vm.expectRevert(TrustedReporterAdapter.AlreadyResolved.selector);
+        adapter.postOhlcResult(MARKET, 10e8, 5e8, 7e8, t, ds, ohlcSig);
+    }
+
+    function test_RevertWhen_resolveAfterOhlc() public {
+        uint64 t = uint64(block.timestamp);
+        bytes32 ds = keccak256("x");
+        bytes memory ohlcSig = _signOhlc(MARKET, 10e8, 5e8, 7e8, t, ds);
+        adapter.postOhlcResult(MARKET, 10e8, 5e8, 7e8, t, ds, ohlcSig);
+        bytes memory resolveSig = _signResolve(MARKET, 99e8, t, ds);
+        vm.expectRevert(TrustedReporterAdapter.AlreadyResolved.selector);
+        adapter.postResolveResult(MARKET, 99e8, t, ds, resolveSig);
     }
 
     function test_RevertWhen_doubleLock() public {
@@ -163,6 +195,18 @@ contract TrustedReporterAdapterTest is Test {
 
         vm.expectRevert(ECDSA.ECDSAInvalidSignature.selector);
         adapter.postOhlcResult(MARKET, 1e8, 1e8, 1e8, t, ds, sig);
+    }
+
+    function test_RevertWhen_ohlc_high_below_low() public {
+        uint64 t = uint64(block.timestamp);
+        vm.expectRevert(TrustedReporterAdapter.InvalidOhlc.selector);
+        adapter.postOhlcResult(MARKET, 1e8, 2e8, 1e8, t, bytes32(0), "");
+    }
+
+    function test_RevertWhen_ohlc_close_outside_range() public {
+        uint64 t = uint64(block.timestamp);
+        vm.expectRevert(TrustedReporterAdapter.InvalidOhlc.selector);
+        adapter.postOhlcResult(MARKET, 10e8, 5e8, 2e8, t, bytes32(0), "");
     }
 
     function test_RevertWhen_constructor_zeroReporter() public {

@@ -138,6 +138,10 @@ contract YieldRouterV2Test is Test {
         vm.expectRevert(YieldRouterV2.InvalidAddress.selector);
         router.rescueToken(address(aToken), address(this), 1);
 
+        vm.prank(router.owner());
+        vm.expectRevert(YieldRouterV2.InvalidAddress.selector);
+        router.rescueToken(address(stake), address(this), 1);
+
         MockERC20 stray = new MockERC20();
         stray.mint(address(router), 123);
         vm.prank(router.owner());

@@ -32,6 +32,8 @@ library MarketTypes {
     uint256 internal constant BPS_DENOMINATOR = 10_000;
     /// @dev Absolute confidence floor (8 decimals) used with relative bps checks for tiny prices.
     uint256 internal constant MIN_ABSOLUTE_CONFIDENCE_E8 = 10;
+    /// @dev Minimum |checkpoint A| for Velocity markets (e8) so bps move is not dominated by rounding.
+    uint256 internal constant MIN_VELOCITY_BASE_ABS_E8 = 1000;
     uint256 internal constant SLUG_MAX_LEN = 32;
     uint256 internal constant ASSET_SYMBOL_MAX_LEN = 16;
 

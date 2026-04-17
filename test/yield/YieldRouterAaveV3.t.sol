@@ -91,6 +91,24 @@ contract YieldRouterAaveV3Test is Test {
         assertEq(out, 0);
     }
 
+    function test_emergencyWithdraw_proRata_two_templates() public {
+        stake.mint(engine, 10_000);
+        stake.approve(address(router), 10_000);
+        router.deposit(t0, 6000);
+        router.deposit(t1, 4000);
+        assertEq(router.totalPrincipal(), 10_000);
+
+        uint256 g1 = router.emergencyWithdraw(t0);
+        assertGt(g1, 0);
+        assertEq(router.principalByTemplate(t0), 0);
+        assertEq(router.principalByTemplate(t1), 4000);
+        assertEq(router.totalPrincipal(), 4000);
+
+        uint256 g2 = router.emergencyWithdraw(t1);
+        assertGt(g2, 0);
+        assertEq(router.totalPrincipal(), 0);
+    }
+
     function test_setTemplateYieldPath_allows_only_AToken_path() public {
         router.setTemplateYieldPath(t0, IYieldRouterV2.YieldPath.AToken);
 

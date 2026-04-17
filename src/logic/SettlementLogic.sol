@@ -77,8 +77,10 @@ library SettlementLogic {
             e.winningOutcomeMask = outputs.winningMask;
         } else if (e.marketType == MarketTypes.MarketType.Corridor) {
             outputs.refundMode = false;
-            outputs.winningMask =
-                Resolvers.resolveCorridor(e.epochHighE8, e.epochLowE8, e.rangeBoundsE8[1], e.rangeBoundsE8[0]);
+            // Corridor: rangeBoundsE8[0] = lower bound, [1] = upper (strictly lower < upper; enforced at upsert).
+            int256 lowerBound = e.rangeBoundsE8[0];
+            int256 upperBound = e.rangeBoundsE8[1];
+            outputs.winningMask = Resolvers.resolveCorridor(e.epochHighE8, e.epochLowE8, upperBound, lowerBound);
             e.winningOutcomeMask = outputs.winningMask;
         } else {
             outputs.refundMode = false;

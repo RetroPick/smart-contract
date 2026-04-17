@@ -10,13 +10,15 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IYieldRouter} from "../interfaces/IYieldRouter.sol";
 import {IYieldRouterV2} from "../interfaces/IYieldRouterV2.sol";
 import {IPoolAaveV3} from "./interfaces/IPoolAaveV3.sol";
+import {IScaledBalanceToken} from "./interfaces/IScaledBalanceToken.sol";
 
 /// @title YieldRouterAaveV3
 /// @notice Aave v3 yield router that holds aTokens and accounts balances per `templateId`.
 /// @dev
 /// - Pulls `stakeToken` from the engine on deposit.
 /// - Supplies into Aave v3 pool, receiving `aToken` (rebasing receipt token).
-/// - Withdraws proportional aToken shares by principal accounting, sending `stakeToken` directly to engine.
+/// - Withdraws underlying pro-rata to each template’s principal share of the router’s current aToken balance
+///   (Aave `withdraw` amount is underlying, not stale minted aToken units).
 /// - Implements `IYieldRouterV2` for dispatcher typing; scaled views map to legacy share accounting.
 contract YieldRouterAaveV3 is IYieldRouter, IYieldRouterV2, Ownable2Step {
     using SafeERC20 for IERC20;
@@ -29,8 +31,11 @@ contract YieldRouterAaveV3 is IYieldRouter, IYieldRouterV2, Ownable2Step {
     /// @dev Per-template outstanding principal (in stakeToken units).
     mapping(bytes32 templateId => uint256) public principalByTemplate;
 
-    /// @dev Per-template attributed aToken share balance (in aToken units).
+    /// @dev Per-template attributed **scaled** aToken balance (matches `IScaledBalanceToken.scaledBalanceOf`).
     mapping(bytes32 templateId => uint256) public sharesByTemplate;
+
+    /// @dev Sum of `principalByTemplate` — used to pro-rate current aToken balance per template on withdraw.
+    uint256 public totalPrincipal;
 
     error OnlyEngine();
     error Unauthorized();
@@ -66,13 +71,14 @@ contract YieldRouterAaveV3 is IYieldRouter, IYieldRouterV2, Ownable2Step {
         // slither-disable-next-line arbitrary-send-erc20 -- `from` is immutable ENGINE; `onlyEngine` gates callers; pulls engine vault, not arbitrary users.
         STAKE_TOKEN.safeTransferFrom(ENGINE, address(this), amount);
 
-        uint256 beforeBal = A_TOKEN.balanceOf(address(this));
+        uint256 scaledBefore = IScaledBalanceToken(address(A_TOKEN)).scaledBalanceOf(address(this));
         AAVE_POOL.supply(address(STAKE_TOKEN), amount, address(this), 0);
-        uint256 afterBal = A_TOKEN.balanceOf(address(this));
-        uint256 minted = afterBal - beforeBal;
+        uint256 scaledAfter = IScaledBalanceToken(address(A_TOKEN)).scaledBalanceOf(address(this));
+        uint256 minted = scaledAfter - scaledBefore;
 
         principalByTemplate[templateId] += amount;
         sharesByTemplate[templateId] += minted;
+        totalPrincipal += amount;
 
         emit YieldDeposited(templateId, amount, minted);
     }
@@ -89,8 +95,18 @@ contract YieldRouterAaveV3 is IYieldRouter, IYieldRouterV2, Ownable2Step {
             ? totalShares
             : Math.mulDiv(totalShares, principalAmount, principal, Math.Rounding.Floor);
 
-        grossAmount = AAVE_POOL.withdraw(address(STAKE_TOKEN), sharesToRedeem, ENGINE);
+        uint256 bal = A_TOKEN.balanceOf(address(this));
+        uint256 underlyingToWithdraw;
+        if (principalAmount == principal) {
+            underlyingToWithdraw = (principal == totalPrincipal) ? bal : Math.mulDiv(bal, principal, totalPrincipal);
+        } else {
+            uint256 claim = Math.mulDiv(bal, principal, totalPrincipal);
+            underlyingToWithdraw = Math.mulDiv(claim, principalAmount, principal, Math.Rounding.Floor);
+        }
 
+        grossAmount = AAVE_POOL.withdraw(address(STAKE_TOKEN), underlyingToWithdraw, ENGINE);
+
+        totalPrincipal -= principalAmount;
         principalByTemplate[templateId] = principal - principalAmount;
         sharesByTemplate[templateId] = totalShares - sharesToRedeem;
 
@@ -118,15 +134,18 @@ contract YieldRouterAaveV3 is IYieldRouter, IYieldRouterV2, Ownable2Step {
     function emergencyWithdraw(bytes32 templateId) external override returns (uint256 grossAmount) {
         if (msg.sender != ENGINE && msg.sender != owner()) revert Unauthorized();
 
-        uint256 shares = sharesByTemplate[templateId];
-        if (shares == 0) return 0;
+        uint256 p = principalByTemplate[templateId];
+        if (p == 0) return 0;
 
-        grossAmount = AAVE_POOL.withdraw(address(STAKE_TOKEN), shares, ENGINE);
+        uint256 bal = A_TOKEN.balanceOf(address(this));
+        uint256 toWithdraw = (p == totalPrincipal) ? bal : Math.mulDiv(bal, p, totalPrincipal);
+        grossAmount = AAVE_POOL.withdraw(address(STAKE_TOKEN), toWithdraw, ENGINE);
 
+        totalPrincipal -= p;
         principalByTemplate[templateId] = 0;
         sharesByTemplate[templateId] = 0;
 
-        emit EmergencyWithdraw(templateId, shares, grossAmount);
+        emit EmergencyWithdraw(templateId, toWithdraw, grossAmount);
     }
 
     // --- IYieldRouterV2 (compat layer; legacy rebasing share accounting) ---

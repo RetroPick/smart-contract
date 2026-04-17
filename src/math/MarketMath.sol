@@ -229,12 +229,15 @@ library MarketMath {
         uint256[8] memory stakes,
         uint256 remainingClaimsForEpoch
     ) internal view returns (uint256 payout, uint256 userWinningStake_) {
-        userWinningStake_ = totalWinningStake(epoch.winningOutcomeMask, epoch.outcomeCount, stakes);
+        uint256 winningMask = epoch.winningOutcomeMask;
+        uint8 outcomeCount = epoch.outcomeCount;
+
+        userWinningStake_ = totalWinningStake(winningMask, outcomeCount, stakes);
         if (userWinningStake_ == 0) return (0, 0);
 
         uint256 winningPool = 0;
-        for (uint256 i = 0; i < epoch.outcomeCount; i++) {
-            if ((epoch.winningOutcomeMask >> i) & 1 == 1) {
+        for (uint256 i = 0; i < outcomeCount; i++) {
+            if ((winningMask >> i) & 1 == 1) {
                 winningPool += epoch.outcomePools[i];
             }
         }

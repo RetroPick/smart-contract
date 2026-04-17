@@ -52,14 +52,29 @@ contract ResolversTest is Test {
 
     function test_velocity_buckets_by_bps_move() public pure {
         MarketTypes.OracleCheckpoint memory a =
-            MarketTypes.OracleCheckpoint({valueE8: 100, publishTime: 0, confidenceE8: 0, written: true});
+            MarketTypes.OracleCheckpoint({valueE8: 100_000_000, publishTime: 0, confidenceE8: 0, written: true});
         MarketTypes.OracleCheckpoint memory b =
-            MarketTypes.OracleCheckpoint({valueE8: 101, publishTime: 0, confidenceE8: 0, written: true});
+            MarketTypes.OracleCheckpoint({valueE8: 101_000_000, publishTime: 0, confidenceE8: 0, written: true});
         uint32[7] memory vb;
         vb[0] = 50;
         vb[1] = 200;
         uint256 m = Resolvers.resolveVelocity(a, b, 3, vb);
         assertEq(m, 1 << 1);
+    }
+
+    /// @dev External hop so `vm.expectRevert` observes the library revert boundary.
+    function _velocityTinyBaseExt() external pure {
+        MarketTypes.OracleCheckpoint memory a =
+            MarketTypes.OracleCheckpoint({valueE8: 500, publishTime: 0, confidenceE8: 0, written: true});
+        MarketTypes.OracleCheckpoint memory b =
+            MarketTypes.OracleCheckpoint({valueE8: 600, publishTime: 0, confidenceE8: 0, written: true});
+        uint32[7] memory vb;
+        Resolvers.resolveVelocity(a, b, 3, vb);
+    }
+
+    function test_RevertWhen_velocity_base_too_small() public {
+        vm.expectRevert(Resolvers.InvalidEpochState.selector);
+        this._velocityTinyBaseExt();
     }
 
     function test_ladder_same_as_range_on_bounds() public pure {
@@ -124,6 +139,20 @@ contract ResolversTest is Test {
             cps[i] = MarketTypes.OracleCheckpoint({valueE8: v, publishTime: 0, confidenceE8: 0, written: true});
         }
         uint256 m = Resolvers.resolveComposite(MarketTypes.CompositeLogic.Majority, 3, cond, th, cps);
+        assertEq(m, 1);
+    }
+
+    function test_composite_majority_two_feeds_one_pass_is_yes() public pure {
+        MarketTypes.Condition[4] memory cond;
+        cond[0] = MarketTypes.Condition.AtOrAbove;
+        cond[1] = MarketTypes.Condition.AtOrAbove;
+        int256[4] memory th;
+        th[0] = 100;
+        th[1] = 100;
+        MarketTypes.OracleCheckpoint[4] memory cps;
+        cps[0] = MarketTypes.OracleCheckpoint({valueE8: 100, publishTime: 0, confidenceE8: 0, written: true});
+        cps[1] = MarketTypes.OracleCheckpoint({valueE8: 99, publishTime: 0, confidenceE8: 0, written: true});
+        uint256 m = Resolvers.resolveComposite(MarketTypes.CompositeLogic.Majority, 2, cond, th, cps);
         assertEq(m, 1);
     }
 

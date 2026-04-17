@@ -2,6 +2,7 @@
 pragma solidity 0.8.24;
 
 import {MarketTypes} from "../types/MarketTypes.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @title Resolvers
 /// @notice Pure resolution logic for determining winning outcomes from oracle checkpoints and template params.
@@ -60,10 +61,8 @@ library Resolvers {
     /// @notice Resolve a RangeClose market by selecting a bucket index at checkpoint B.
     /// @dev
     /// `rangeBoundsE8` defines the bucket boundaries (strictly increasing for the used prefix).
-    /// Bucket selection for `outcomeCount` buckets:
-    /// - idx = 0 if `value < bounds[0]`
-    /// - idx = i if `bounds[i-1] <= value < bounds[i]` for i in [1..outcomeCount-2]
-    /// - idx = outcomeCount-1 otherwise
+    /// Walk `bounds[0..outcomeCount-2]` for the first `value < bounds[i]`; if none, `idx = outcomeCount - 1`.
+    /// Equivalently: idx = 0 iff `value < bounds[0]`; idx = i for `bounds[i-1] <= value < bounds[i]`; else last bucket.
     function resolveRangeClose(
         MarketTypes.OracleCheckpoint memory b,
         uint8 outcomeCount,
@@ -72,16 +71,11 @@ library Resolvers {
         if (!b.written) revert InvalidEpochState();
         if (outcomeCount < 2) revert InvalidTemplate();
         int256 value = b.valueE8;
-        uint256 idx;
-        if (value < rangeBoundsE8[0]) {
-            idx = 0;
-        } else {
-            idx = uint256(outcomeCount) - 1;
-            for (uint256 i = 1; i < uint256(outcomeCount) - 1; i++) {
-                if (value < rangeBoundsE8[i]) {
-                    idx = i;
-                    break;
-                }
+        uint256 idx = uint256(outcomeCount) - 1;
+        for (uint256 i = 0; i < uint256(outcomeCount) - 1; i++) {
+            if (value < rangeBoundsE8[i]) {
+                idx = i;
+                break;
             }
         }
         return uint256(1) << idx;
@@ -107,6 +101,7 @@ library Resolvers {
         uint256 absDelta = uint256(delta < 0 ? -delta : delta);
         uint256 absBase = uint256(a.valueE8 < 0 ? -a.valueE8 : a.valueE8);
         if (absBase == 0) revert InvalidEpochState();
+        if (absBase < MarketTypes.MIN_VELOCITY_BASE_ABS_E8) revert InvalidEpochState();
         uint256 moveBpsE4 = (absDelta * 10_000) / absBase;
         uint256 idx;
         if (moveBpsE4 < velocityBoundsE4[0]) {
@@ -142,9 +137,16 @@ library Resolvers {
         uint256 openSpread = uint256((a1.valueE8 - a2.valueE8) < 0 ? (a2.valueE8 - a1.valueE8) : (a1.valueE8 - a2.valueE8));
         uint256 closeSpread =
             uint256((b1.valueE8 - b2.valueE8) < 0 ? (b2.valueE8 - b1.valueE8) : (b1.valueE8 - b2.valueE8));
-        uint256 band = (openSpread * uint256(toleranceBps)) / 10_000;
-        if (closeSpread + band < openSpread) return (false, uint256(1) << 0);
-        if (closeSpread > openSpread + band) return (false, uint256(1) << 1);
+        uint256 band = Math.mulDiv(openSpread, uint256(toleranceBps), 10_000);
+        // Compare without `closeSpread + band` / `openSpread + band` to avoid uint256 add overflow on extreme spreads.
+        if (closeSpread < openSpread) {
+            uint256 narrowedBy = openSpread - closeSpread;
+            if (band < narrowedBy) return (false, uint256(1) << 0);
+        }
+        if (closeSpread > openSpread) {
+            uint256 widenedBy = closeSpread - openSpread;
+            if (widenedBy > band) return (false, uint256(1) << 1);
+        }
         return (true, 0);
     }
 
@@ -170,11 +172,13 @@ library Resolvers {
         } else if (logic == MarketTypes.CompositeLogic.Or) {
             result = trueCount > 0;
         } else {
-            result = trueCount > feedCount / 2;
+            // Majority: at least half of feeds pass (e.g. 1 of 2, 2 of 3, 2 of 4). Ties count toward YES.
+            result = 2 * trueCount >= feedCount;
         }
         return result ? (uint256(1) << 0) : (uint256(1) << 1);
     }
 
+    /// @dev `upperBoundE8` must exceed `lowerBoundE8` (enforced when the template is upserted for Corridor).
     function resolveCorridor(int256 highE8, int256 lowE8, int256 upperBoundE8, int256 lowerBoundE8)
         internal
         pure

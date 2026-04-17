@@ -275,9 +275,10 @@ contract MarketTypeAll15Test is MarketEngineBase {
 
     function test_marketType_10_cascade_downward_support_breaks() public {
         MarketEngine.UpsertTemplateParams memory p = _cascadeTemplate("mt-cascade-oil", address(tro), true);
-        p.rangeBoundsE8[0] = 75e8;
+        // Downward cascade: bounds must be strictly decreasing (see template validation).
+        p.rangeBoundsE8[0] = 80e8;
         p.rangeBoundsE8[1] = 78e8;
-        p.rangeBoundsE8[2] = 80e8;
+        p.rangeBoundsE8[2] = 75e8;
         bytes32 tid = _createAndInit(p);
         _assertEpochOracleRouting(
             tid, 1, MarketTypes.OracleKind.TrustedReporter, MarketTypes.OracleClass.CHAINLINK_PRICE, true
@@ -501,13 +502,13 @@ contract MarketTypeAll15Test is MarketEngineBase {
         assertGt(balAfter, balBefore);
     }
 
+    /// @dev Corridor/Cascade need `getOhlcResult`; scalar resolve and OHLC are mutually exclusive on the adapter.
     function _postTROResolveAndOhlc(bytes32 templateId, uint64 epochId, int256 closeE8, int256 highE8, int256 lowE8)
         internal
     {
         bytes32 marketId = engine.positionKey(templateId, epochId);
         bytes32 ds = keccak256("markettype-e2e");
         uint64 observedAt = uint64(block.timestamp);
-        _postTroResolve(marketId, closeE8, observedAt, ds);
         _postTroOhlc(marketId, highE8, lowE8, closeE8, observedAt, ds);
     }
 
