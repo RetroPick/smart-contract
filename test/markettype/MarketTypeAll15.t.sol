@@ -245,6 +245,35 @@ contract MarketTypeAll15Test is MarketEngineBase {
         _assertMask(tid, 1, 1 << 0);
     }
 
+    /// @dev Per-feed composite thresholds: legacy single threshold50e8 would fail feed C at 20e8; explicit100/30/15e8 passes all.
+    function test_marketType_08b_composite_perFeedThresholds_majority() public {
+        MarketEngine.UpsertTemplateParams memory p = _compositeTemplate("mt-composite-perfeed", FEED_B, FEED_C);
+        p.absoluteThresholdValueE8 = 50e8;
+        p.compositeAbsoluteThresholdsE8[0] = 100e8;
+        p.compositeAbsoluteThresholdsE8[1] = 30e8;
+        p.compositeAbsoluteThresholdsE8[2] = 15e8;
+        bytes32 tid = _createAndInit(p);
+
+        uint64 t0 = 1_075_000;
+        _openAndSeedBinary(tid, t0, 100e18, 100e18);
+
+        vm.warp(t0 + 200);
+        oracle.set(feed, 99e8, t0 + 200, 0);
+        oracle.set(FEED_B, 101e8, t0 + 200, 0);
+        oracle.set(FEED_C, 102e8, t0 + 200, 0);
+        vm.prank(worker);
+        engine.lockEpoch(tid, 1);
+
+        vm.warp(t0 + 300);
+        oracle.set(feed, 110e8, t0 + 300, 0);
+        oracle.set(FEED_B, 35e8, t0 + 300, 0);
+        oracle.set(FEED_C, 20e8, t0 + 300, 0);
+        vm.prank(worker);
+        engine.resolveEpoch(tid, 1);
+
+        _assertMask(tid, 1, 1 << 0);
+    }
+
     function test_marketType_09_corridor_stablecoin_with_tro_ohlc() public {
         MarketEngine.UpsertTemplateParams memory p = _corridorTemplate("mt-corridor-usdc", address(tro));
         bytes32 tid = _createAndInit(p);

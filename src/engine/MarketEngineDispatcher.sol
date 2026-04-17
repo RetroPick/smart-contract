@@ -12,6 +12,9 @@ import {MarketEngineState} from "./MarketEngineState.sol";
 /// @dev Routes calls by selector to trusted module contracts via delegatecall.
 /// Trust: `admin` wiring via `setSelectorModule` points delegatecall targets at this proxy’s storage—incorrect modules
 /// or malicious bytecode are equivalent to a compromised admin. UUPS upgrades share the same trust boundary.
+/// Module onboarding is two-step: `allowModuleCodeHash` commits to an exact bytecode artifact, then `registerModule`
+/// pins a live address to that hash. The storage-compatibility marker is auxiliary; layout safety requires modules
+/// to inherit `MarketEngineState` (or an audited equivalent) and off-chain verification.
 contract MarketEngineDispatcher is Initializable, ReentrancyGuardTransient, UUPSUpgradeable, MarketEngineState {
     bytes4 private constant SELECTOR_INITIALIZE = 0x7b89ffdb;
     bytes4 private constant SELECTOR_UPGRADE_TO_AND_CALL = 0x4f1ef286;
@@ -28,6 +31,7 @@ contract MarketEngineDispatcher is Initializable, ReentrancyGuardTransient, UUPS
         mapping(bytes4 selector => bool immutableSelector) selectorImmutable;
         mapping(address module => bool approved) approvedModules;
         mapping(address module => bytes32 codeHash) moduleCodeHash;
+        mapping(bytes32 codeHash => bool allowed) allowedModuleCodeHashes;
     }
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -70,6 +74,23 @@ contract MarketEngineDispatcher is Initializable, ReentrancyGuardTransient, UUPS
         emit ConfigInitialized(config.admin, config.treasury, config.worker);
     }
 
+    function allowModuleCodeHash(bytes32 codeHash) external onlyAdmin {
+        if (codeHash == bytes32(0)) revert ModuleCodeHashNotAllowed(codeHash);
+        ModuleRegistryStorage storage $ = _moduleRegistryStorage();
+        $.allowedModuleCodeHashes[codeHash] = true;
+        emit ModuleCodeHashAllowed(codeHash);
+    }
+
+    function disallowModuleCodeHash(bytes32 codeHash) external onlyAdmin {
+        ModuleRegistryStorage storage $ = _moduleRegistryStorage();
+        delete $.allowedModuleCodeHashes[codeHash];
+        emit ModuleCodeHashDisallowed(codeHash);
+    }
+
+    function isModuleCodeHashAllowed(bytes32 codeHash) external view returns (bool) {
+        return _moduleRegistryStorage().allowedModuleCodeHashes[codeHash];
+    }
+
     function registerModule(address module, bytes32 expectedCodeHash) external onlyAdmin {
         if (module == address(0) || module.code.length == 0) revert InvalidModule();
         _enforceModuleStorageCompatibility(module);
@@ -79,6 +100,7 @@ contract MarketEngineDispatcher is Initializable, ReentrancyGuardTransient, UUPS
         }
 
         ModuleRegistryStorage storage $ = _moduleRegistryStorage();
+        if (!$.allowedModuleCodeHashes[actualCodeHash]) revert ModuleCodeHashNotAllowed(actualCodeHash);
         $.approvedModules[module] = true;
         $.moduleCodeHash[module] = expectedCodeHash;
         emit ModuleRegistered(module, expectedCodeHash);

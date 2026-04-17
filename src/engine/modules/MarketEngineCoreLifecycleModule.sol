@@ -57,10 +57,11 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         MarketTypes.Condition[4] compositeConditions;
         uint8 compositeFeedCount;
         MarketTypes.CompositeLogic compositeLogic;
+        int256[4] compositeAbsoluteThresholdsE8;
     }
 
     function upsertTemplate(UpsertTemplateParams calldata p) external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         if (bytes(p.slug).length == 0 || bytes(p.slug).length > MarketTypes.SLUG_MAX_LEN) revert InvalidTemplate();
         if (bytes(p.assetSymbol).length == 0 || bytes(p.assetSymbol).length > MarketTypes.ASSET_SYMBOL_MAX_LEN) {
             revert InvalidTemplate();
@@ -111,6 +112,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         t.compositeConditions = p.compositeConditions;
         t.compositeFeedCount = p.compositeFeedCount;
         t.compositeLogic = p.compositeLogic;
+        t.compositeAbsoluteThresholdsE8 = p.compositeAbsoluteThresholdsE8;
 
         if (p.executionMode == MarketTypes.ExecutionMode.Rolling) {
             if (p.rollingIntervalSeconds == 0) revert RollingInvalidParams();
@@ -123,7 +125,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
     }
 
     function openEpoch(bytes32 templateId, uint64 epochId, uint64 openAt, uint64 lockAt, uint64 resolveAt) external {
-        if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
+        _authAdminOrWorker();
         if (globalPaused) revert ProtocolPaused();
         _openEpoch(templateId, epochId, openAt, lockAt, resolveAt);
     }
@@ -135,7 +137,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         uint64[] calldata lockAt,
         uint64[] calldata resolveAt
     ) external {
-        if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
+        _authAdminOrWorker();
         if (globalPaused) revert ProtocolPaused();
         uint256 n = templateIds.length;
         _validateBatchSize(n);
@@ -148,13 +150,13 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
     }
 
     function lockEpoch(bytes32 templateId, uint64 epochId) external {
-        if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
+        _authAdminOrWorker();
         if (globalPaused) revert ProtocolPaused();
         _lockEpoch(templateId, epochId);
     }
 
     function lockEpochsBatch(bytes32[] calldata templateIds, uint64[] calldata epochIds) external {
-        if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
+        _authAdminOrWorker();
         if (globalPaused) revert ProtocolPaused();
         uint256 n = templateIds.length;
         _validateBatchSize(n);
@@ -165,13 +167,13 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
     }
 
     function resolveEpoch(bytes32 templateId, uint64 epochId) external nonReentrant {
-        if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
+        _authAdminOrWorker();
         if (globalPaused) revert ProtocolPaused();
         _resolveEpoch(templateId, epochId);
     }
 
     function resolveEpochsBatch(bytes32[] calldata templateIds, uint64[] calldata epochIds) external nonReentrant {
-        if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
+        _authAdminOrWorker();
         if (globalPaused) revert ProtocolPaused();
         uint256 n = templateIds.length;
         _validateBatchSize(n);
@@ -186,9 +188,8 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         external
         nonReentrant
     {
-        if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
+        _authAdminOrWorker();
         if (globalPaused && msg.sender != admin) revert ProtocolPaused();
-        if (!configInitialized) revert Unauthorized();
         if (reason == MarketTypes.CancelReason.NoneReason) revert InvalidEpochState();
         MarketTypes.Template storage t = _templates[templateId];
         MarketTypes.Ledger storage ledger = _ledgers[templateId];
@@ -290,12 +291,13 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         e.compositeConditions = t.compositeConditions;
         e.compositeFeedCount = t.compositeFeedCount;
         e.compositeLogic = t.compositeLogic;
+        e.compositeAbsoluteThresholdsE8 = t.compositeAbsoluteThresholdsE8;
         ledger.activeEpochId = epochId;
         emit EpochOpened(templateId, epochId, openAt, lockAt, resolveAt);
     }
 
     function _lockEpoch(bytes32 templateId, uint64 epochId) internal {
-        if (!configInitialized) revert Unauthorized();
+        if (!configInitialized) revert NotInitialized();
         if (_templates[templateId].executionMode == MarketTypes.ExecutionMode.Rolling) revert ManualModeOnly();
         MarketTypes.Ledger storage ledger = _ledgers[templateId];
         if (!ledger.initialized) revert InvalidTemplate();
@@ -334,7 +336,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
     }
 
     function _resolveEpoch(bytes32 templateId, uint64 epochId) internal {
-        if (!configInitialized) revert Unauthorized();
+        if (!configInitialized) revert NotInitialized();
         if (_templates[templateId].executionMode == MarketTypes.ExecutionMode.Rolling) revert ManualModeOnly();
         MarketTypes.Ledger storage ledger = _ledgers[templateId];
         if (!ledger.initialized) revert InvalidTemplate();
@@ -733,7 +735,8 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
                 }
             }
         } else if (t.marketType == MarketTypes.MarketType.Corridor) {
-            if (t.outcomeCount < 2) revert InvalidTemplate();
+            // `Resolvers.resolveCorridor` uses outcomes 0=in-band, 1=upper breach, 2=lower breach.
+            if (t.outcomeCount != 3) revert InvalidTemplate();
             if (!(t.rangeBoundsE8[0] < t.rangeBoundsE8[1])) revert InvalidTemplate();
             for (uint256 i = 2; i < uint256(t.outcomeCount) - 1; i++) {
                 if (!(t.rangeBoundsE8[i - 1] < t.rangeBoundsE8[i])) revert InvalidTemplate();

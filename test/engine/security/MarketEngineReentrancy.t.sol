@@ -82,4 +82,39 @@ contract MarketEngineReentrancyTest is MarketEngineBase {
         MarketTypes.Epoch memory e = engine.epochs(tid, 1);
         assertEq(e.totalPool, 1000 ether);
     }
+
+    /// @dev `resolveEpoch` is `nonReentrant`; malicious `withdrawScaled` must not reenter `depositToSideFor`.
+    function test_resolveEpoch_revertsOnYieldRouterReentrancy() public {
+        bytes32 tid = _tid("re-resolve");
+        uint64 t0 = 7_000_000;
+        vm.prank(admin);
+        engine.upsertTemplate(_defaultThresholdTemplate("re-resolve"));
+        vm.prank(admin);
+        engine.initializeMarket(tid);
+
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.openEpoch(tid, 1, uint64(t0), uint64(t0 + 100), uint64(t0 + 200));
+
+        badRouter.setDepositScaledReturn(1);
+        token.mint(alice, 10_000 ether);
+        vm.startPrank(alice);
+        token.approve(address(engine), type(uint256).max);
+        engine.depositToSide(tid, 1, 0, 1000 ether);
+        vm.stopPrank();
+
+        vm.warp(t0 + 110);
+        oracle.set(feed, 100e8, uint64(t0 + 110), 0);
+        vm.prank(worker);
+        engine.lockEpoch(tid, 1);
+
+        badRouter.setReenterDepositForParams(alice, tid, 1, 0, 1 wei);
+        badRouter.setReenterWithdraw(true);
+
+        vm.warp(t0 + 210);
+        oracle.set(feed, 200e8, uint64(t0 + 210), 0);
+        vm.prank(worker);
+        vm.expectRevert(ReentrancyGuardTransient.ReentrancyGuardReentrantCall.selector);
+        engine.resolveEpoch(tid, 1);
+    }
 }

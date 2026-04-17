@@ -19,8 +19,10 @@ contract RollbackModular is Script {
         address rollbackModule = vm.envAddress("ROLLBACK_MODULE");
 
         vm.startBroadcast();
-        MarketEngineDispatcher(proxy).registerModule(rollbackModule, keccak256(rollbackModule.code));
-        MarketEngineDispatcher(proxy).setSelectorModule(selector, rollbackModule, false);
+        MarketEngineDispatcher dispatcher = MarketEngineDispatcher(proxy);
+        dispatcher.allowModuleCodeHash(keccak256(rollbackModule.code));
+        dispatcher.registerModule(rollbackModule, keccak256(rollbackModule.code));
+        dispatcher.setSelectorModule(selector, rollbackModule, false);
         emit SelectorRolledBack(proxy, selector, rollbackModule);
         vm.stopBroadcast();
     }

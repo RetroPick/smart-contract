@@ -41,6 +41,7 @@ interface IMarketEngine {
         MarketTypes.Condition[4] compositeConditions;
         uint8 compositeFeedCount;
         MarketTypes.CompositeLogic compositeLogic;
+        int256[4] compositeAbsoluteThresholdsE8;
     }
 
     event ConfigInitialized(address admin, address treasury, address workerAuthority);

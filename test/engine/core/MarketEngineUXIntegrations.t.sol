@@ -467,6 +467,12 @@ contract MarketEngineUXIntegrationsTest is Test {
         address coreLifecycleModule,
         address rollingLifecycleModule
     ) internal {
+        dispatcher.allowModuleCodeHash(keccak256(adminModule.code));
+        dispatcher.allowModuleCodeHash(keccak256(viewModule.code));
+        dispatcher.allowModuleCodeHash(keccak256(userOpsClaimsModule.code));
+        dispatcher.allowModuleCodeHash(keccak256(coreLifecycleModule.code));
+        dispatcher.allowModuleCodeHash(keccak256(rollingLifecycleModule.code));
+
         dispatcher.registerModule(adminModule, keccak256(adminModule.code));
         dispatcher.registerModule(viewModule, keccak256(viewModule.code));
         dispatcher.registerModule(userOpsClaimsModule, keccak256(userOpsClaimsModule.code));

@@ -190,6 +190,9 @@ library MarketTypes {
         Condition[4] compositeConditions;
         uint8 compositeFeedCount;
         CompositeLogic compositeLogic;
+        /// @dev Per-feed absolute thresholds for Composite (e8). If all entries for `i < compositeFeedCount` are zero,
+        /// settlement uses `absoluteThresholdValueE8` for every feed (legacy). Otherwise `compositeAbsoluteThresholdsE8[i]` is used for feed `i`.
+        int256[4] compositeAbsoluteThresholdsE8;
     }
 
     struct Ledger {
@@ -268,6 +271,7 @@ library MarketTypes {
         Condition[4] compositeConditions;
         uint8 compositeFeedCount;
         CompositeLogic compositeLogic;
+        int256[4] compositeAbsoluteThresholdsE8;
         OracleClass oracleClass;
         bool cascadeDownward;
         OracleCheckpoint checkpointA_B;

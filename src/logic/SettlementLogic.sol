@@ -66,9 +66,13 @@ library SettlementLogic {
             outputs.winningMask = maskCv;
             e.winningOutcomeMask = maskCv;
         } else if (e.marketType == MarketTypes.MarketType.Composite) {
-            int256[4] memory thresholds = [int256(0), int256(0), int256(0), int256(0)];
+            int256[4] memory thresholds;
+            bool allUnset = true;
             for (uint256 i = 0; i < e.compositeFeedCount; i++) {
-                thresholds[i] = e.absoluteThresholdValueE8;
+                if (e.compositeAbsoluteThresholdsE8[i] != 0) allUnset = false;
+            }
+            for (uint256 i = 0; i < e.compositeFeedCount; i++) {
+                thresholds[i] = allUnset ? e.absoluteThresholdValueE8 : e.compositeAbsoluteThresholdsE8[i];
             }
             outputs.refundMode = false;
             outputs.winningMask = Resolvers.resolveComposite(

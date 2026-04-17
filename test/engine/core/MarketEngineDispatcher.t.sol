@@ -10,6 +10,7 @@ import {MockERC20} from "../../../src/test/MockERC20.sol";
 import {MockPriceOracle} from "../../../src/test/MockPriceOracle.sol";
 import {MockDispatcherModule} from "../../../src/test/MockDispatcherModule.sol";
 import {MockNonCompliantModule} from "../../../src/test/MockNonCompliantModule.sol";
+import {MaliciousLayoutModule} from "../../../src/test/MaliciousLayoutModule.sol";
 import {MarketEngineState} from "../../../src/engine/MarketEngineState.sol";
 
 contract MarketEngineDispatcherTest is Test {
@@ -53,8 +54,11 @@ contract MarketEngineDispatcherTest is Test {
     }
 
     function _registerMockModule() internal {
-        vm.prank(admin);
-        engine.registerModule(address(module), keccak256(address(module).code));
+        bytes32 h = keccak256(address(module).code);
+        vm.startPrank(admin);
+        engine.allowModuleCodeHash(h);
+        engine.registerModule(address(module), h);
+        vm.stopPrank();
     }
 
     function test_AdminCanSetSelectorModuleAndDelegateCall() public {
@@ -148,6 +152,107 @@ contract MarketEngineDispatcherTest is Test {
             )
         );
         engine.registerModule(address(nonCompliantModule), keccak256(address(nonCompliantModule).code));
+    }
+
+    function test_registerModule_reverts_when_code_hash_not_allowlisted() public {
+        bytes32 h = keccak256(address(module).code);
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(MarketEngineState.ModuleCodeHashNotAllowed.selector, h));
+        engine.registerModule(address(module), h);
+    }
+
+    function test_allow_then_register_succeeds() public {
+        bytes32 h = keccak256(address(module).code);
+        vm.startPrank(admin);
+        engine.allowModuleCodeHash(h);
+        engine.registerModule(address(module), h);
+        vm.stopPrank();
+        assertTrue(engine.isModuleApproved(address(module)));
+    }
+
+    function test_allowModuleCodeHash_reverts_for_zero_hash() public {
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(MarketEngineState.ModuleCodeHashNotAllowed.selector, bytes32(0)));
+        engine.allowModuleCodeHash(bytes32(0));
+    }
+
+    function test_disallowModuleCodeHash_blocks_register() public {
+        bytes32 h = keccak256(address(module).code);
+        vm.startPrank(admin);
+        engine.allowModuleCodeHash(h);
+        engine.disallowModuleCodeHash(h);
+        vm.expectRevert(abi.encodeWithSelector(MarketEngineState.ModuleCodeHashNotAllowed.selector, h));
+        engine.registerModule(address(module), h);
+        vm.stopPrank();
+    }
+
+    /// @dev Layout clash demo: compatibility marker passes, but delegatecall writes slot 0 = proxy `stakeToken`.
+    /// Requires admin to allowlist this bytecode and register the module—same trust as any malicious artifact.
+    function test_malicious_layout_module_corrupts_stakeToken_via_delegatecall() public {
+        MaliciousLayoutModule malicious = new MaliciousLayoutModule();
+        bytes32 h = keccak256(address(malicious).code);
+        address attacker = makeAddr("attacker");
+        bytes4 pwnSel = bytes4(keccak256("pwn(address)"));
+
+        vm.startPrank(admin);
+        engine.allowModuleCodeHash(h);
+        engine.registerModule(address(malicious), h);
+        engine.setSelectorModule(pwnSel, address(malicious), false);
+        vm.stopPrank();
+
+        assertEq(address(engine.stakeToken()), address(token));
+        (bool ok,) = address(engine).call(abi.encodeWithSelector(pwnSel, attacker));
+        assertTrue(ok);
+        assertEq(address(engine.stakeToken()), attacker);
+    }
+
+    function testFork_malicious_layout_corrupts_stakeToken_when_rpc_set() public {
+        string memory rpc = vm.envOr("BASE_RPC_URL", string(""));
+        if (bytes(rpc).length == 0) {
+            rpc = vm.envOr("BASE_RPC", string(""));
+        }
+        if (bytes(rpc).length == 0) return;
+
+        vm.createSelectFork(rpc);
+
+        MockERC20 tok = new MockERC20();
+        MockPriceOracle o = new MockPriceOracle();
+        MaliciousLayoutModule malicious = new MaliciousLayoutModule();
+        MarketEngineDispatcher impl = new MarketEngineDispatcher();
+        address proxy = UnsafeUpgrades.deployUUPSProxy(
+            address(impl),
+            abi.encodeCall(
+                MarketEngineDispatcher.initialize,
+                (IMarketEngine.InitConfig({
+                        stakeToken: tok,
+                        priceOracle: o,
+                        admin: admin,
+                        treasury: treasury,
+                        worker: worker,
+                        defaultSettlementFeeBps: 50,
+                        maxSwitchFeeBps: 200,
+                        maxOutcomes: 8,
+                        oracleKind: MarketTypes.OracleKind.Chainlink,
+                        oracleMaxDelaySeconds: 600,
+                        oracleMaxConfidenceBps: 0
+                    }))
+            )
+        );
+        MarketEngineDispatcher eng = MarketEngineDispatcher(payable(proxy));
+        bytes32 h = keccak256(address(malicious).code);
+        address attacker = makeAddr("attackerFork");
+        bytes4 pwnSel = bytes4(keccak256("pwn(address)"));
+
+        vm.startPrank(admin);
+        eng.allowModuleCodeHash(h);
+        eng.registerModule(address(malicious), h);
+        eng.setSelectorModule(pwnSel, address(malicious), false);
+        vm.stopPrank();
+
+        assertEq(address(eng.stakeToken()), address(tok));
+        (bool ok,) = address(eng).call(abi.encodeWithSelector(pwnSel, attacker));
+        assertTrue(ok);
+        assertEq(address(eng.stakeToken()), attacker);
     }
 
     function test_revokeModule_blocks_delegatecall_path() public {

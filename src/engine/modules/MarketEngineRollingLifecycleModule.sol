@@ -23,9 +23,8 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
     }
 
     function genesisStartRolling(bytes32 templateId) external {
-        if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
+        _authAdminOrWorker();
         if (globalPaused) revert ProtocolPaused();
-        if (!configInitialized) revert Unauthorized();
         MarketTypes.Template storage t = _templates[templateId];
         if (t.version == 0) revert InvalidTemplate();
         if (t.executionMode != MarketTypes.ExecutionMode.Rolling) revert RollingModeOnly();
@@ -42,9 +41,8 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
     }
 
     function genesisLockRolling(bytes32 templateId) external nonReentrant {
-        if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
+        _authAdminOrWorker();
         if (globalPaused) revert ProtocolPaused();
-        if (!configInitialized) revert Unauthorized();
         MarketTypes.Template storage t = _templates[templateId];
         if (t.executionMode != MarketTypes.ExecutionMode.Rolling) revert RollingModeOnly();
         MarketTypes.Ledger storage ledger = _ledgers[templateId];
@@ -77,13 +75,13 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
     }
 
     function executeRollingRound(bytes32 templateId) external nonReentrant {
-        if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
+        _authAdminOrWorker();
         if (globalPaused) revert ProtocolPaused();
         _executeRollingRoundCore(templateId);
     }
 
     function executeRollingRoundBatch(bytes32[] calldata templateIds) external nonReentrant {
-        if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
+        _authAdminOrWorker();
         if (globalPaused) revert ProtocolPaused();
         uint256 n = templateIds.length;
         _validateBatchSize(n);
@@ -93,7 +91,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
     }
 
     function haltRollingMarket(bytes32 templateId) external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         MarketTypes.Template storage t = _templates[templateId];
         if (t.executionMode != MarketTypes.ExecutionMode.Rolling) revert RollingModeOnly();
         MarketTypes.Ledger storage ledger = _ledgers[templateId];
@@ -106,7 +104,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
     }
 
     function resetRollingLifecycle(bytes32 templateId, uint64 nextRollingEpochId) external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         if (!globalPaused) revert ProtocolPaused();
         MarketTypes.Template storage t = _templates[templateId];
         if (t.executionMode != MarketTypes.ExecutionMode.Rolling) revert RollingModeOnly();
@@ -131,7 +129,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         MarketTypes.CancelReason reason,
         bool voided
     ) external nonReentrant {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         if (!globalPaused) revert ProtocolPaused();
         if (reason == MarketTypes.CancelReason.NoneReason) revert InvalidEpochState();
         MarketTypes.Template storage t = _templates[templateId];

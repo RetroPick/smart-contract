@@ -15,12 +15,12 @@ contract MarketEngineAdminModule is MarketEngineState {
     using SafeERC20 for IERC20;
 
     function pauseProgram(bool paused) external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         globalPaused = paused;
     }
 
     function setWorkerAuthority(address worker) external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         if (worker == address(0)) revert InvalidAuthority();
         address prev = workerAuthority;
         workerAuthority = worker;
@@ -28,7 +28,7 @@ contract MarketEngineAdminModule is MarketEngineState {
     }
 
     function setTreasury(address t) external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         if (t == address(0)) revert InvalidAuthority();
         address prev = treasury;
         treasury = t;
@@ -36,13 +36,13 @@ contract MarketEngineAdminModule is MarketEngineState {
     }
 
     function setDepositExecutor(address account, bool allowed) external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         isDepositExecutor[account] = allowed;
         emit DepositExecutorSet(account, allowed);
     }
 
     function setYieldRouter(address router, uint16 feeBps) external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         if (feeBps > 10_000) revert InvalidFeeBps();
         address old = address(yieldRouter);
         yieldRouter = IYieldRouterV2(router);
@@ -57,7 +57,7 @@ contract MarketEngineAdminModule is MarketEngineState {
     }
 
     function setRateOracle(address oracle) external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         if (oracle == address(0)) revert InvalidOracleFeed();
         address old = address(rateOracle);
         rateOracle = IPriceOracle(oracle);
@@ -65,7 +65,7 @@ contract MarketEngineAdminModule is MarketEngineState {
     }
 
     function setSmartDataOracle(address oracle) external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         if (oracle == address(0)) revert InvalidOracleFeed();
         address old = address(smartDataOracle);
         smartDataOracle = IPriceOracle(oracle);
@@ -73,7 +73,7 @@ contract MarketEngineAdminModule is MarketEngineState {
     }
 
     function setMacroOracle(address oracle) external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         if (oracle == address(0)) revert InvalidOracleFeed();
         address old = address(macroOracle);
         macroOracle = IPriceOracle(oracle);
@@ -81,7 +81,7 @@ contract MarketEngineAdminModule is MarketEngineState {
     }
 
     function setEquityOracle(address oracle) external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         if (oracle == address(0)) revert InvalidOracleFeed();
         address old = address(equityOracle);
         equityOracle = IPriceOracle(oracle);
@@ -89,14 +89,14 @@ contract MarketEngineAdminModule is MarketEngineState {
     }
 
     function setLmRewardsEnabled(bool enabled) external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         if (enabled && address(yieldRouter) == address(0)) revert Unauthorized();
         lmRewardsEnabled = enabled;
         emit LMRewardsEnabledUpdated(enabled);
     }
 
     function keeperClaimLmRewards(bytes32 templateId) external {
-        if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
+        _authAdminOrWorker();
         IYieldRouterV2 r = yieldRouter;
         if (address(r) == address(0)) revert Unauthorized();
         if (!lmRewardsEnabled) return;
@@ -110,7 +110,7 @@ contract MarketEngineAdminModule is MarketEngineState {
     }
 
     function yieldEmergencyWithdraw(bytes32 templateId) external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         IYieldRouterV2 r = yieldRouter;
         if (address(r) == address(0)) revert Unauthorized();
         // slither-disable-next-line unused-return -- gross underlying is transferred to engine by router; no local use.
@@ -118,14 +118,14 @@ contract MarketEngineAdminModule is MarketEngineState {
     }
 
     function resetYieldRouterFailures() external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         yieldRouterFailureCount = 0;
         yieldRouterDisabled = false;
         emit YieldRouterFailureStateReset();
     }
 
     function initializeMarket(bytes32 templateId) external {
-        if (msg.sender != admin) revert Unauthorized();
+        _authAdmin();
         MarketTypes.Template storage t = _templates[templateId];
         if (t.version == 0) revert InvalidTemplate();
         MarketTypes.Ledger storage ledger = _ledgers[templateId];
@@ -141,8 +141,7 @@ contract MarketEngineAdminModule is MarketEngineState {
     }
 
     function withdrawFees(bytes32 templateId, uint256 amount) external {
-        if (msg.sender != treasury && msg.sender != admin) revert Unauthorized();
-        if (!configInitialized) revert Unauthorized();
+        _authTreasuryOrAdmin();
         if (amount == 0) revert NothingToClaim();
         MarketTypes.Ledger storage ledger = _ledgers[templateId];
         if (!ledger.initialized) revert InvalidTemplate();

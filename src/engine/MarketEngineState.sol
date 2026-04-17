@@ -9,7 +9,9 @@ import {MarketMath} from "../math/MarketMath.sol";
 import {SettlementLogic} from "../logic/SettlementLogic.sol";
 
 /// @notice Canonical MarketEngine storage anchor used by dispatcher/modules.
-/// @dev Keep this layout append-only for upgrade safety.
+/// @dev Keep this layout append-only for upgrade safety. Delegatecall modules must use this exact layout
+/// (typically by inheriting this contract). The `marketEngineStorageCompatibility()` marker is not a proof of
+/// layout correctness on-chain—only discipline, review, and the dispatcher bytecode allowlist mitigate storage clashes.
 /// Trust / deployment: primitives (`admin`, `stakeToken`, `oracleConfig`, …) are set in
 /// `MarketEngineDispatcher.initialize` on the UUPS proxy. Mappings default to empty. A proxy that
 /// skips `initialize` is broken by design—operational risk, not an on-chain uninitialized read.
@@ -129,8 +131,11 @@ abstract contract MarketEngineState {
     error InvalidBatchSize(uint256 requested);
     error UnapprovedModule(address module);
     error ModuleCodeHashMismatch(address module, bytes32 expectedCodeHash, bytes32 actualCodeHash);
+    error ModuleCodeHashNotAllowed(bytes32 codeHash);
     error SelectorImmutable(bytes4 selector);
     error OracleAdapterNotConfigured();
+    error NotInitialized();
+    error VaultInsufficientActive(bytes32 templateId, uint256 active, uint256 required);
 
     event ConfigInitialized(address admin, address treasury, address workerAuthority);
     event TemplateUpserted(
@@ -209,6 +214,8 @@ abstract contract MarketEngineState {
     event WorkerAuthorityUpdated(address indexed previousWorker, address indexed newWorker);
     event TreasuryUpdated(address indexed previousTreasury, address indexed newTreasury);
     event ModuleRegistered(address indexed module, bytes32 indexed codeHash);
+    event ModuleCodeHashAllowed(bytes32 indexed codeHash);
+    event ModuleCodeHashDisallowed(bytes32 indexed codeHash);
     event ModuleRevoked(address indexed module);
     event SelectorModuleSet(bytes4 indexed selector, address indexed module, bool immutableSelector);
     event RateOracleSet(address indexed previousOracle, address indexed newOracle);
@@ -217,12 +224,30 @@ abstract contract MarketEngineState {
     event EquityOracleSet(address indexed previousOracle, address indexed newOracle);
 
     modifier onlyAdmin() {
+        if (!configInitialized) revert NotInitialized();
         if (msg.sender != admin) revert Unauthorized();
         _;
     }
 
+    /// @dev Modules use these instead of duplicating `onlyAdmin` / worker checks so uninitialized proxies reject cleanly.
+    function _authAdmin() internal view {
+        if (!configInitialized) revert NotInitialized();
+        if (msg.sender != admin) revert Unauthorized();
+    }
+
+    function _authAdminOrWorker() internal view {
+        if (!configInitialized) revert NotInitialized();
+        if (msg.sender != admin && msg.sender != workerAuthority) revert Unauthorized();
+    }
+
+    function _authTreasuryOrAdmin() internal view {
+        if (!configInitialized) revert NotInitialized();
+        if (msg.sender != treasury && msg.sender != admin) revert Unauthorized();
+    }
+
     /// @notice Delegatecall module compatibility marker.
-    /// @dev Dispatcher verifies this marker on module registration/runtime to reduce storage-layout mismatch risk.
+    /// @dev Dispatcher verifies this marker on registration and before delegatecall; it only proves the module
+    /// implements this selector with the expected constant, not that bytecode matches `MarketEngineState` storage.
     function marketEngineStorageCompatibility() external pure returns (bytes32) {
         return MODULE_STORAGE_COMPATIBILITY_ID;
     }
@@ -273,6 +298,10 @@ abstract contract MarketEngineState {
         SettlementLogic.Outputs memory outputs,
         uint64 nowTs
     ) internal {
+        uint256 totalDeduction = outputs.claimLiabilityTotal + outputs.settlementFeeTotal;
+        if (_vaults[templateId].active < totalDeduction) {
+            revert VaultInsufficientActive(templateId, _vaults[templateId].active, totalDeduction);
+        }
         if (outputs.claimLiabilityTotal > 0) {
             _vaults[templateId].active -= outputs.claimLiabilityTotal;
             _vaults[templateId].claims += outputs.claimLiabilityTotal;
