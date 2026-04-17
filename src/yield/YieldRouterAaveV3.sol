@@ -2,6 +2,7 @@
 pragma solidity 0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
@@ -84,8 +85,9 @@ contract YieldRouterAaveV3 is IYieldRouter, IYieldRouterV2, Ownable2Step {
         if (principalAmount > principal) revert OverWithdraw();
 
         uint256 totalShares = sharesByTemplate[templateId];
-        uint256 sharesToRedeem =
-            principalAmount == principal ? totalShares : (totalShares * principalAmount) / principal;
+        uint256 sharesToRedeem = principalAmount == principal
+            ? totalShares
+            : Math.mulDiv(totalShares, principalAmount, principal, Math.Rounding.Floor);
 
         grossAmount = AAVE_POOL.withdraw(address(STAKE_TOKEN), sharesToRedeem, ENGINE);
 
@@ -128,6 +130,11 @@ contract YieldRouterAaveV3 is IYieldRouter, IYieldRouterV2, Ownable2Step {
     }
 
     // --- IYieldRouterV2 (compat layer; legacy rebasing share accounting) ---
+
+    /// @inheritdoc IYieldRouterV2
+    function yieldRouterApiVersion() external pure override returns (uint256) {
+        return 1;
+    }
 
     function depositScaled(bytes32 templateId, uint256 amount)
         external

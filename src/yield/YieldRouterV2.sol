@@ -4,6 +4,7 @@ pragma solidity 0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 
@@ -128,6 +129,11 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
 
     // --- IYieldRouterV2 ---
 
+    /// @inheritdoc IYieldRouterV2
+    function yieldRouterApiVersion() external pure override returns (uint256) {
+        return 1;
+    }
+
     function depositScaled(bytes32 templateId, uint256 amount)
         external
         override
@@ -188,7 +194,9 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
             uint256 sharesTotal = t.stataShares;
             if (sharesTotal == 0) revert OverWithdraw();
             uint256 totalAssets = STATA_TOKEN.convertToAssets(sharesTotal);
-            uint256 underlyingRequest = principalAmount == p ? totalAssets : (totalAssets * principalAmount) / p;
+            uint256 underlyingRequest = principalAmount == p
+                ? totalAssets
+                : Math.mulDiv(totalAssets, principalAmount, p, Math.Rounding.Floor);
             uint256 sharesToRedeem = principalAmount == p ? sharesTotal : STATA_TOKEN.convertToShares(underlyingRequest);
             if (sharesToRedeem > sharesTotal) sharesToRedeem = sharesTotal;
             grossAmount = STATA_TOKEN.redeem(sharesToRedeem, ENGINE, address(this));

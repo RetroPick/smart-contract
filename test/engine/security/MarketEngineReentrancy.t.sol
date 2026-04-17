@@ -41,6 +41,9 @@ contract MarketEngineReentrancyTest is MarketEngineBase {
         uint64 t0 = 5_000_000;
         _openManualEpoch(tid, t0);
 
+        // Credit `routedPrincipal` so `_withdrawSwitchFeePrincipal` calls `withdrawScaled` (mock returned 0 attribution before).
+        badRouter.setDepositScaledReturn(1);
+
         token.mint(alice, 10_000 ether);
         vm.startPrank(alice);
         token.approve(address(engine), type(uint256).max);

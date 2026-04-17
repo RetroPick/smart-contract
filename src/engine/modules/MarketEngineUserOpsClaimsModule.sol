@@ -265,7 +265,7 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
         if (principalToWithdraw > e.routedPrincipal) principalToWithdraw = e.routedPrincipal;
         if (principalToWithdraw == 0) return;
 
-        uint256 grossReturned = r.withdrawScaled(templateId, principalToWithdraw);
+        uint256 grossReturned = _balanceDeltaAfterWithdrawScaled(r, templateId, principalToWithdraw);
         e.routedPrincipal -= principalToWithdraw;
         if (grossReturned > principalToWithdraw) {
             uint256 grossYield = grossReturned - principalToWithdraw;

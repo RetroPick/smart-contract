@@ -12,6 +12,9 @@ contract MockYieldRouterReentrant is IYieldRouterV2 {
     bool public reenterOnDepositScaled;
     bool public reenterOnWithdrawScaled;
 
+    /// @dev If non-zero, `depositScaled` returns this so the engine credits `Epoch.routedPrincipal` (tests that need `withdrawScaled` to run).
+    uint256 public depositScaledReturn;
+
     address public reenterBeneficiary;
     bytes32 public reenterTemplateId;
     uint64 public reenterEpochId;
@@ -30,6 +33,10 @@ contract MockYieldRouterReentrant is IYieldRouterV2 {
 
     function setReenterWithdraw(bool on) external {
         reenterOnWithdrawScaled = on;
+    }
+
+    function setDepositScaledReturn(uint256 attributionUnits) external {
+        depositScaledReturn = attributionUnits;
     }
 
     function setReenterDepositForParams(address beneficiary, bytes32 tid, uint64 eid, uint8 outcome, uint256 amt)
@@ -69,7 +76,7 @@ contract MockYieldRouterReentrant is IYieldRouterV2 {
             IMarketEngine(ENGINE)
                 .depositToSideFor(reenterBeneficiary, templateId, reenterEpochId, reenterOutcome, reenterAmount);
         }
-        return 0;
+        return depositScaledReturn;
     }
 
     function withdrawScaled(bytes32 templateId, uint256) external override onlyEngine returns (uint256) {
@@ -101,6 +108,10 @@ contract MockYieldRouterReentrant is IYieldRouterV2 {
         returns (address[] memory tokens, uint256[] memory pending)
     {
         return (new address[](0), new uint256[](0));
+    }
+
+    function yieldRouterApiVersion() external pure override returns (uint256) {
+        return 1;
     }
 
     function setTemplateYieldPath(bytes32, IYieldRouterV2.YieldPath) external pure override {}

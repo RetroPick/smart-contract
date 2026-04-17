@@ -20,8 +20,9 @@ import {IPriceOracleWithRoundId} from "../interfaces/IPriceOracleWithRoundId.sol
 /// - `addressToFeedId(addr)` encodes to `bytes32(uint256(uint160(addr)))`
 ///
 /// NOTES: Freshness model
-/// Uses Chainlink `latestRoundData()` and treats `updatedAt` as `publishTime`. Freshness is enforced by:
-/// `nowTs - updatedAt <= maxAgeSeconds`, where `nowTs` is supplied by the caller.
+/// Uses Chainlink `latestRoundData()` and treats `updatedAt` as `publishTime`. Freshness and sequencer grace
+/// use `block.timestamp` only. The `nowTs` argument exists for `IPriceOracle` ABI compatibility (tests/mocks) and
+/// is **ignored** here so direct callers cannot bypass staleness by supplying a fake clock.
 ///
 /// NOTES: Round completeness
 /// Enforces `answeredInRound >= roundId` to ensure the returned answer is complete for that round.
@@ -79,13 +80,14 @@ contract ChainlinkAdapter is IPriceOracle, IPriceOracleWithRoundId, Ownable2Step
     }
 
     /// @inheritdoc IPriceOracle
-    function getNormalizedPrice(bytes32 feedId, uint64 maxAgeSeconds, uint64 nowTs)
+    function getNormalizedPrice(bytes32 feedId, uint64 maxAgeSeconds, uint64)
         external
         view
         override
         returns (int256 priceE8, uint64 publishTime, uint256 confidenceE8)
     {
-        _checkSequencer(nowTs);
+        uint256 tNow = block.timestamp;
+        _checkSequencer(tNow);
 
         address feedAddr = address(uint160(uint256(feedId)));
         if (feedAddr == address(0)) revert InvalidFeedAddress();
@@ -98,10 +100,10 @@ contract ChainlinkAdapter is IPriceOracle, IPriceOracleWithRoundId, Ownable2Step
         if (answeredInRound < roundId) revert RoundNotComplete(roundId, answeredInRound);
         if (answer <= 0) revert InvalidPrice();
         if (updatedAt == 0) revert InvalidPrice();
-        if (updatedAt > uint256(nowTs)) revert StalePriceFeed(updatedAt, uint256(maxAgeSeconds), uint256(nowTs));
+        if (updatedAt > tNow) revert StalePriceFeed(updatedAt, uint256(maxAgeSeconds), tNow);
 
-        if (uint256(nowTs) - updatedAt > uint256(maxAgeSeconds)) {
-            revert StalePriceFeed(updatedAt, uint256(maxAgeSeconds), uint256(nowTs));
+        if (tNow - updatedAt > uint256(maxAgeSeconds)) {
+            revert StalePriceFeed(updatedAt, uint256(maxAgeSeconds), tNow);
         }
 
         FeedDecimalsConfig memory cfg = _feedDecimals[feedId];
@@ -113,13 +115,14 @@ contract ChainlinkAdapter is IPriceOracle, IPriceOracleWithRoundId, Ownable2Step
     }
 
     /// @inheritdoc IPriceOracleWithRoundId
-    function getNormalizedPriceWithRoundId(bytes32 feedId, uint64 maxAgeSeconds, uint64 nowTs)
+    function getNormalizedPriceWithRoundId(bytes32 feedId, uint64 maxAgeSeconds, uint64)
         external
         view
         override
         returns (uint80 roundId, int256 priceE8, uint64 publishTime, uint256 confidenceE8)
     {
-        _checkSequencer(nowTs);
+        uint256 tNow = block.timestamp;
+        _checkSequencer(tNow);
 
         address feedAddr = address(uint160(uint256(feedId)));
         if (feedAddr == address(0)) revert InvalidFeedAddress();
@@ -135,10 +138,10 @@ contract ChainlinkAdapter is IPriceOracle, IPriceOracleWithRoundId, Ownable2Step
         if (answeredInRound < roundId) revert RoundNotComplete(roundId, answeredInRound);
         if (answer <= 0) revert InvalidPrice();
         if (updatedAt == 0) revert InvalidPrice();
-        if (updatedAt > uint256(nowTs)) revert StalePriceFeed(updatedAt, uint256(maxAgeSeconds), uint256(nowTs));
+        if (updatedAt > tNow) revert StalePriceFeed(updatedAt, uint256(maxAgeSeconds), tNow);
 
-        if (uint256(nowTs) - updatedAt > uint256(maxAgeSeconds)) {
-            revert StalePriceFeed(updatedAt, uint256(maxAgeSeconds), uint256(nowTs));
+        if (tNow - updatedAt > uint256(maxAgeSeconds)) {
+            revert StalePriceFeed(updatedAt, uint256(maxAgeSeconds), tNow);
         }
 
         FeedDecimalsConfig memory cfg = _feedDecimals[feedId];
@@ -150,7 +153,7 @@ contract ChainlinkAdapter is IPriceOracle, IPriceOracleWithRoundId, Ownable2Step
     }
 
     /// @dev Chainlink L2 pattern: answer 1 = sequencer down; answer 0 = up, then enforce post-recovery grace.
-    function _checkSequencer(uint64 nowTs) internal view {
+    function _checkSequencer(uint256 tNow) internal view {
         if (address(sequencerFeed) == address(0)) return;
 
         // slither-disable-next-line unused-return -- sequencer metadata slots unused; answer and startedAt drive grace
@@ -158,10 +161,10 @@ contract ChainlinkAdapter is IPriceOracle, IPriceOracleWithRoundId, Ownable2Step
 
         if (answer != 0) revert SequencerDown();
         if (startedAt == 0) revert InvalidSequencerRoundData();
-        if (startedAt > uint256(nowTs)) revert InvalidSequencerRoundData();
+        if (startedAt > tNow) revert InvalidSequencerRoundData();
 
         // Match Chainlink’s L2 sequencer example: wait until strictly after the grace window.
-        uint256 timeSinceUp = uint256(nowTs) - startedAt;
+        uint256 timeSinceUp = tNow - startedAt;
         if (timeSinceUp <= GRACE_PERIOD_SECONDS) {
             revert SequencerInGracePeriod(startedAt, startedAt + GRACE_PERIOD_SECONDS);
         }

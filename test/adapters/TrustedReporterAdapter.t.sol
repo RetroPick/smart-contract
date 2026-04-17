@@ -2,6 +2,7 @@
 pragma solidity 0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {TrustedReporterAdapter} from "../../src/oracle/TrustedReporterAdapter.sol";
 
 contract TrustedReporterAdapterTest is Test {
@@ -133,5 +134,45 @@ contract TrustedReporterAdapterTest is Test {
         vm.prank(owner);
         adapter.setTrustedReporter(newRep);
         assertEq(adapter.trustedReporter(), newRep);
+    }
+
+    /// @dev Attacker pattern: invalid `v` (not 27/28) makes `ecrecover` return `address(0)`. OZ ECDSA must revert,
+    ///      not compare `(0 == trustedReporter)` — and this adapter forbids zero reporter at deploy.
+    function test_RevertWhen_resolve_malformedSignature_invalidV_attackerCannotSpoof() public {
+        uint64 t = uint64(block.timestamp);
+        bytes32 ds = keccak256("attacker");
+        bytes memory sig = abi.encodePacked(bytes32(0), bytes32(0), uint8(29));
+
+        vm.expectRevert(ECDSA.ECDSAInvalidSignature.selector);
+        adapter.postResolveResult(MARKET, 999e8, t, ds, sig);
+    }
+
+    function test_RevertWhen_lock_malformedSignature_invalidV_attackerCannotSpoof() public {
+        uint64 t = uint64(block.timestamp);
+        bytes32 ds = keccak256("attacker");
+        bytes memory sig = abi.encodePacked(bytes32(0), bytes32(0), uint8(29));
+
+        vm.expectRevert(ECDSA.ECDSAInvalidSignature.selector);
+        adapter.postLockSample(MARKET, 1e8, t, ds, sig);
+    }
+
+    function test_RevertWhen_ohlc_malformedSignature_invalidV_attackerCannotSpoof() public {
+        uint64 t = uint64(block.timestamp);
+        bytes32 ds = keccak256("attacker");
+        bytes memory sig = abi.encodePacked(bytes32(0), bytes32(0), uint8(29));
+
+        vm.expectRevert(ECDSA.ECDSAInvalidSignature.selector);
+        adapter.postOhlcResult(MARKET, 1e8, 1e8, 1e8, t, ds, sig);
+    }
+
+    function test_RevertWhen_constructor_zeroReporter() public {
+        vm.expectRevert(TrustedReporterAdapter.ZeroAddress.selector);
+        new TrustedReporterAdapter(address(0), owner, 1 hours);
+    }
+
+    function test_RevertWhen_setTrustedReporter_zeroAddress() public {
+        vm.prank(owner);
+        vm.expectRevert(TrustedReporterAdapter.ZeroAddress.selector);
+        adapter.setTrustedReporter(address(0));
     }
 }

@@ -54,6 +54,21 @@ contract ChainlinkAdapterTest is Test {
         adapter.getNormalizedPrice(feedId, 86_400, uint64(block.timestamp));
     }
 
+    /// @dev Regression: caller-supplied `nowTs` must not shrink perceived age vs `block.timestamp` (staleness bypass).
+    function test_revert_stale_even_if_caller_passes_fake_recent_nowTs() public {
+        feed.makeStale(90_001);
+        uint64 fakeNow = uint64(10_000_000 - 4_000);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ChainlinkAdapter.StalePriceFeed.selector,
+                uint256(10_000_000 - 90_001),
+                uint256(86_400),
+                uint256(10_000_000)
+            )
+        );
+        adapter.getNormalizedPrice(feedId, 86_400, fakeNow);
+    }
+
     function test_revert_sequencer_down() public {
         seq.setDown();
         vm.expectRevert(ChainlinkAdapter.SequencerDown.selector);

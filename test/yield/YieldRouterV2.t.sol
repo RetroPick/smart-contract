@@ -40,6 +40,10 @@ contract YieldRouterV2Test is Test {
         pool.setYieldBps(500);
     }
 
+    function test_yieldRouterApiVersion() public view {
+        assertEq(router.yieldRouterApiVersion(), 1);
+    }
+
     function test_depositScaled_tracks_scaled_and_principal() public {
         vm.prank(engine);
         uint256 units = router.depositScaled(tid, 1000e18);

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+
 /// @title YieldAccounting
 /// @notice Ray math (1e27) aligned with Aave v3 `WadRayMath` rounding for scaled balance accounting.
 library YieldAccounting {
@@ -40,6 +42,8 @@ library YieldAccounting {
     }
 
     /// @notice Underlying to withdraw for a partial principal redemption (floor rounding).
+    /// @dev Uses 512-bit `mulDiv` (floor) for `(totalValue * withdrawPrincipal) / totalPrincipal` to avoid overflow
+    ///      and match conservative protocol rounding; residual “dust” yield may remain until full unwind.
     function proportionalUnderlying(
         uint256 totalScaled,
         uint256 totalPrincipal,
@@ -49,6 +53,6 @@ library YieldAccounting {
         if (withdrawPrincipal == 0 || totalPrincipal == 0) return 0;
         uint256 totalValue = scaledToReal(totalScaled, liquidityIndex);
         if (withdrawPrincipal >= totalPrincipal) return totalValue;
-        return (totalValue * withdrawPrincipal) / totalPrincipal;
+        return Math.mulDiv(totalValue, withdrawPrincipal, totalPrincipal, Math.Rounding.Floor);
     }
 }

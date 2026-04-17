@@ -477,9 +477,13 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         uint256 routedPrincipal = e.routedPrincipal;
         if (routedPrincipal < 1) return 0;
 
-        try r.withdrawScaled(templateId, routedPrincipal) returns (uint256 grossReturned) {
+        uint256 b0 = stakeToken.balanceOf(address(this));
+        try r.withdrawScaled(templateId, routedPrincipal) returns (uint256) {
+            uint256 b1 = stakeToken.balanceOf(address(this));
+            if (b1 < b0) revert YieldRouterBalanceInvariant();
+            uint256 received = b1 - b0;
             e.routedPrincipal = 0;
-            if (grossReturned > routedPrincipal) return grossReturned - routedPrincipal;
+            if (received > routedPrincipal) return received - routedPrincipal;
             return 0;
         } catch {
             emit YieldRouterWithdrawFailed(templateId, epochId, routedPrincipal);

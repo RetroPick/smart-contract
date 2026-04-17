@@ -122,6 +122,7 @@ abstract contract MarketEngineState {
         uint80 newRoundId, uint80 lastRoundId, uint64 newPublishTime, uint64 lastPublishTime
     );
     error YieldWithdrawFailed();
+    error YieldRouterBalanceInvariant();
     error ModuleNotSet(bytes4 selector);
     error InvalidModule();
     error IncompatibleModuleStorage(address module);
@@ -234,6 +235,8 @@ abstract contract MarketEngineState {
         return keccak256(bytes(slug));
     }
 
+    /// @notice Canonical `marketId` for trusted-reporter / event oracles: `keccak256(abi.encodePacked(templateId, epochId))`.
+    /// @dev Fixed-width `bytes32` + `uint64` packing is injective on pairs (no classic `encodePacked` ambiguity with dynamic types).
     function positionKey(bytes32 templateId, uint64 epochId) public pure returns (bytes32) {
         return keccak256(abi.encodePacked(templateId, epochId));
     }
@@ -322,6 +325,20 @@ abstract contract MarketEngineState {
             if (((e.winningOutcomeMask >> i) & 1) != 0) sum += e.outcomePools[i];
         }
         e.remainingWinningStake = sum;
+    }
+
+    /// @dev Uses `stakeToken` balance delta after `withdrawScaled`; do not trust the router return value for accounting.
+    function _balanceDeltaAfterWithdrawScaled(IYieldRouterV2 r, bytes32 templateId, uint256 principalAmount)
+        internal
+        returns (uint256 received)
+    {
+        uint256 b0 = stakeToken.balanceOf(address(this));
+        r.withdrawScaled(templateId, principalAmount);
+        uint256 b1 = stakeToken.balanceOf(address(this));
+        if (b1 < b0) revert YieldRouterBalanceInvariant();
+        unchecked {
+            return b1 - b0;
+        }
     }
 }
 // slither-disable-end uninitialized-state

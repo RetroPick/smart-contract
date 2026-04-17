@@ -208,14 +208,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         if (address(r) != address(0) && e.routedPrincipal > 0) {
             uint256 routedPrincipal = e.routedPrincipal;
             if (routedPrincipal > 0) {
-                try r.withdrawScaled(templateId, routedPrincipal) returns (uint256 grossReturned) {
-                    e.routedPrincipal = 0;
-                    if (grossReturned > routedPrincipal) {
-                        uint256 grossYield = grossReturned - routedPrincipal;
-                        _vaults[templateId].fees += grossYield;
-                        ledger.feeReserveTotal += grossYield;
-                    }
-                } catch {
+                if (!_tryWithdrawRoutedForCancel(r, templateId, epochId, routedPrincipal, ledger)) {
                     emit YieldRouterWithdrawFailed(templateId, epochId, routedPrincipal);
                     revert YieldWithdrawFailed();
                 }
@@ -488,6 +481,32 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         }
     }
 
+    /// @dev Isolated for stack depth; uses `stakeToken` balance delta (not router return) for yield on cancel.
+    function _tryWithdrawRoutedForCancel(
+        IYieldRouterV2 r,
+        bytes32 templateId,
+        uint64 epochId,
+        uint256 routedPrincipal,
+        MarketTypes.Ledger storage ledger
+    ) private returns (bool) {
+        MarketTypes.Epoch storage ep = _epochs[templateId][epochId];
+        uint256 b0 = stakeToken.balanceOf(address(this));
+        try r.withdrawScaled(templateId, routedPrincipal) returns (uint256) {
+            uint256 b1 = stakeToken.balanceOf(address(this));
+            if (b1 < b0) revert YieldRouterBalanceInvariant();
+            uint256 received = b1 - b0;
+            ep.routedPrincipal = 0;
+            if (received > routedPrincipal) {
+                uint256 gy = received - routedPrincipal;
+                _vaults[templateId].fees += gy;
+                ledger.feeReserveTotal += gy;
+            }
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
     function _withdrawRoutedPrincipalOnResolve(bytes32 templateId, uint64 epochId)
         internal
         returns (uint256 grossYield)
@@ -499,9 +518,13 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         uint256 routedPrincipal = e.routedPrincipal;
         if (routedPrincipal < 1) return 0;
 
-        try r.withdrawScaled(templateId, routedPrincipal) returns (uint256 grossReturned) {
+        uint256 b0 = stakeToken.balanceOf(address(this));
+        try r.withdrawScaled(templateId, routedPrincipal) returns (uint256) {
+            uint256 b1 = stakeToken.balanceOf(address(this));
+            if (b1 < b0) revert YieldRouterBalanceInvariant();
+            uint256 received = b1 - b0;
             e.routedPrincipal = 0;
-            if (grossReturned > routedPrincipal) return grossReturned - routedPrincipal;
+            if (received > routedPrincipal) return received - routedPrincipal;
             return 0;
         } catch {
             emit YieldRouterWithdrawFailed(templateId, epochId, routedPrincipal);
