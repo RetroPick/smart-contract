@@ -180,7 +180,7 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
                 stakeToken.forceApprove(address(r), routeAmount);
                 try r.depositScaled(templateId, routeAmount) returns (uint256 attributionUnits) {
                     if (attributionUnits > 0) {
-                        e.routedPrincipal += routeAmount;
+                        _recordRoutedPrincipal(templateId, e, routeAmount);
                     } else {
                         emit YieldRouterDepositFailed(templateId, routeAmount);
                     }
@@ -303,10 +303,18 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
 
         uint256 grossReturned = _balanceDeltaAfterWithdrawScaled(r, templateId, principalToWithdraw);
         e.routedPrincipal -= principalToWithdraw;
+        totalRoutedPrincipal -= principalToWithdraw;
+        _templateRoutedPrincipal[templateId] -= principalToWithdraw;
         if (grossReturned > principalToWithdraw) {
             uint256 grossYield = grossReturned - principalToWithdraw;
             vault.fees += grossYield;
             ledger.feeReserveTotal += grossYield;
         }
+    }
+
+    function _recordRoutedPrincipal(bytes32 templateId, MarketTypes.Epoch storage e, uint256 routeAmount) internal {
+        e.routedPrincipal += routeAmount;
+        totalRoutedPrincipal += routeAmount;
+        _templateRoutedPrincipal[templateId] += routeAmount;
     }
 }

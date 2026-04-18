@@ -208,12 +208,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         IYieldRouterV2 r = yieldRouter;
         if (address(r) != address(0) && e.routedPrincipal > 0) {
             uint256 routedPrincipal = e.routedPrincipal;
-            if (!_tryWithdrawRoutedForCancel(r, templateId, epochId, routedPrincipal, ledger)) {
-                emit YieldRouterWithdrawFailed(templateId, epochId, routedPrincipal);
-                _recordYieldRouterFailure();
-                // Do NOT revert: allow cancel to proceed. Principal recovery is possible via
-                // admin yieldEmergencyWithdraw after the yield router is repaired.
-            }
+            _tryWithdrawRoutedForCancel(r, templateId, epochId, routedPrincipal, ledger);
         }
 
         uint256 refundLiability = e.totalPool;
@@ -490,22 +485,16 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         uint64 epochId,
         uint256 routedPrincipal,
         MarketTypes.Ledger storage ledger
-    ) private returns (bool) {
+    ) private {
         MarketTypes.Epoch storage ep = _epochs[templateId][epochId];
-        uint256 b0 = stakeToken.balanceOf(address(this));
-        try r.withdrawScaled(templateId, routedPrincipal) returns (uint256) {
-            uint256 b1 = stakeToken.balanceOf(address(this));
-            if (b1 < b0) revert YieldRouterBalanceInvariant();
-            uint256 received = b1 - b0;
-            ep.routedPrincipal = 0;
-            if (received > routedPrincipal) {
-                uint256 gy = received - routedPrincipal;
-                _vaults[templateId].fees += gy;
-                ledger.feeReserveTotal += gy;
-            }
-            return true;
-        } catch {
-            return false;
+        uint256 received = _balanceDeltaAfterWithdrawScaled(r, templateId, routedPrincipal);
+        ep.routedPrincipal = 0;
+        totalRoutedPrincipal -= routedPrincipal;
+        _templateRoutedPrincipal[templateId] -= routedPrincipal;
+        if (received > routedPrincipal) {
+            uint256 gy = received - routedPrincipal;
+            _vaults[templateId].fees += gy;
+            ledger.feeReserveTotal += gy;
         }
     }
 
@@ -520,19 +509,12 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         uint256 routedPrincipal = e.routedPrincipal;
         if (routedPrincipal < 1) return 0;
 
-        uint256 b0 = stakeToken.balanceOf(address(this));
-        try r.withdrawScaled(templateId, routedPrincipal) returns (uint256) {
-            uint256 b1 = stakeToken.balanceOf(address(this));
-            if (b1 < b0) revert YieldRouterBalanceInvariant();
-            uint256 received = b1 - b0;
-            e.routedPrincipal = 0;
-            if (received > routedPrincipal) return received - routedPrincipal;
-            return 0;
-        } catch {
-            emit YieldRouterWithdrawFailed(templateId, epochId, routedPrincipal);
-            _recordYieldRouterFailure();
-            return 0;
-        }
+        uint256 received = _balanceDeltaAfterWithdrawScaled(r, templateId, routedPrincipal);
+        e.routedPrincipal = 0;
+        totalRoutedPrincipal -= routedPrincipal;
+        _templateRoutedPrincipal[templateId] -= routedPrincipal;
+        if (received > routedPrincipal) return received - routedPrincipal;
+        return 0;
     }
 
     function _recordYieldRouterFailure() internal {

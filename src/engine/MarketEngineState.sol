@@ -54,6 +54,8 @@ abstract contract MarketEngineState {
     mapping(address account => bool) public isDepositExecutor;
     mapping(bytes32 templateId => mapping(address user => uint64[] epochIds)) internal _userEpochs;
     mapping(bytes32 templateId => uint80 lastOracleRoundId) internal lastOracleRoundIdByTemplate;
+    mapping(bytes32 templateId => uint256 unreconciledRecoveredAmount) internal _unreconciledRecoveredByTemplate;
+    mapping(bytes32 templateId => uint256 outstandingRoutedPrincipal) internal _templateRoutedPrincipal;
 
     struct OracleCursor {
         uint80 roundId;
@@ -67,6 +69,7 @@ abstract contract MarketEngineState {
     bool public lmRewardsEnabled;
     bool public yieldRouterDisabled;
     uint8 public yieldRouterFailureCount;
+    uint256 public totalRoutedPrincipal;
     uint8 internal constant MAX_YIELD_ROUTER_FAILURES = 3;
     uint16 internal constant YIELD_BUFFER_BPS = 500;
 
@@ -74,7 +77,7 @@ abstract contract MarketEngineState {
     mapping(bytes4 selector => address module) internal selectorToModule;
     mapping(bytes4 selector => bool immutableSelector) internal selectorImmutable;
 
-    uint256[41] private __gap;
+    uint256[40] private __gap;
 
     error Unauthorized();
     error InvalidAuthority();
@@ -136,6 +139,9 @@ abstract contract MarketEngineState {
     error OracleAdapterNotConfigured();
     error NotInitialized();
     error VaultInsufficientActive(bytes32 templateId, uint256 active, uint256 required);
+    error YieldRouterShortfall(uint256 expectedPrincipal, uint256 recoveredPrincipal);
+    error OutstandingRoutedPrincipal(uint256 outstandingPrincipal);
+    error UnreconciledRecoveryInsufficient(bytes32 templateId, uint256 availableAmount, uint256 requestedAmount);
 
     event ConfigInitialized(address admin, address treasury, address workerAuthority);
     event TemplateUpserted(
@@ -214,6 +220,10 @@ abstract contract MarketEngineState {
     event DepositExecutorSet(address indexed account, bool allowed);
     event WorkerAuthorityUpdated(address indexed previousWorker, address indexed newWorker);
     event TreasuryUpdated(address indexed previousTreasury, address indexed newTreasury);
+    event EpochRoutedPrincipalReconciled(
+        bytes32 indexed templateId, uint64 indexed epochId, uint256 recoveredPrincipal, uint256 remainingPrincipal
+    );
+    event EmergencyRecoveredYieldBooked(bytes32 indexed templateId, uint256 amount);
     event ModuleRegistered(address indexed module, bytes32 indexed codeHash);
     event ModuleCodeHashAllowed(bytes32 indexed codeHash);
     event ModuleCodeHashDisallowed(bytes32 indexed codeHash);
@@ -368,8 +378,9 @@ abstract contract MarketEngineState {
         uint256 b1 = stakeToken.balanceOf(address(this));
         if (b1 < b0) revert YieldRouterBalanceInvariant();
         unchecked {
-            return b1 - b0;
+            received = b1 - b0;
         }
+        if (received < principalAmount) revert YieldRouterShortfall(principalAmount, received);
     }
 }
 // slither-disable-end uninitialized-state

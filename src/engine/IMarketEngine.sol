@@ -120,6 +120,7 @@ interface IMarketEngine {
     function setTreasury(address t) external;
     function setWorkerAuthority(address worker) external;
     function yieldEmergencyWithdraw(bytes32 templateId) external;
+    function reconcileEpochRoutedPrincipal(bytes32 templateId, uint64 epochId, uint256 recoveredPrincipal) external;
     function withdrawFees(bytes32 templateId, uint256 amount) external;
 
     function openEpoch(bytes32 templateId, uint64 epochId, uint64 openAt, uint64 lockAt, uint64 resolveAt) external;
@@ -204,6 +205,8 @@ interface IMarketEngine {
     function yieldFeeBps() external view returns (uint16);
     function yieldRouterDisabled() external view returns (bool);
     function yieldRouterFailureCount() external view returns (uint8);
+    function totalRoutedPrincipal() external view returns (uint256);
+    function unreconciledRecoveredByTemplate(bytes32 templateId) external view returns (uint256);
     function lastOracleRoundIdByTemplate(bytes32 templateId) external view returns (uint80);
 
     function templates(bytes32 templateId) external view returns (MarketTypes.Template memory);

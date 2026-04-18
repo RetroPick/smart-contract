@@ -48,6 +48,7 @@ library ScriptSelectorMatrix {
         dispatcher.setSelectorModule(IMarketEngine.getVaultBalances.selector, m.viewModule, false);
         dispatcher.setSelectorModule(IMarketEngine.getRollingLifecycle.selector, m.viewModule, false);
         dispatcher.setSelectorModule(IMarketEngine.getEpoch.selector, m.viewModule, false);
+        dispatcher.setSelectorModule(IMarketEngine.unreconciledRecoveredByTemplate.selector, m.viewModule, false);
 
         // User operations + claims selectors
         dispatcher.setSelectorModule(IMarketEngine.depositToSide.selector, m.userOpsClaims, false);

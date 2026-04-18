@@ -87,7 +87,7 @@ contract MarketEngineYieldRoutingTest is MarketEngineBase {
         engine.claim(tid, 1);
     }
 
-    function test_manualResolve_continuesAnd_recordsFailure_ifYieldWithdrawReverts() public {
+    function test_manualResolve_reverts_ifYieldWithdrawReverts() public {
         bytes32 tid = _tid("thr");
         uint64 t0 = 2_000_000;
         _initManualThresholdMarket(tid, t0);
@@ -108,12 +108,11 @@ contract MarketEngineYieldRoutingTest is MarketEngineBase {
         pool.setRevertWithdraw(true);
 
         vm.prank(worker);
+        vm.expectRevert(MockAavePool.WithdrawReverted.selector);
         engine.resolveEpoch(tid, 1);
-        assertEq(engine.yieldRouterFailureCount(), 1);
-        assertFalse(engine.yieldRouterDisabled());
     }
 
-    function test_manualResolve_disablesYieldRouter_afterRepeatedWithdrawFailures() public {
+    function test_manualResolve_repeatedWithdrawFailures_doNotAdvanceEpoch() public {
         bytes32 tid = _tid("thr");
         uint64 t0 = 2_100_000;
         vm.prank(admin);
@@ -127,24 +126,24 @@ contract MarketEngineYieldRoutingTest is MarketEngineBase {
         vm.stopPrank();
 
         pool.setRevertWithdraw(true);
-        for (uint64 i = 1; i <= 3; i++) {
-            uint64 start = t0 + (i * 100);
-            vm.warp(start);
-            vm.prank(worker);
-            engine.openEpoch(tid, i, start, start + 10, start + 20);
-            vm.prank(alice);
-            engine.depositToSide(tid, i, 0, 1000);
-            vm.warp(start + 11);
-            vm.prank(worker);
-            engine.lockEpoch(tid, i);
-            vm.warp(start + 21);
-            oracle.set(feed, 200e8, start + 21, 0);
-            vm.prank(worker);
-            engine.resolveEpoch(tid, i);
-        }
+        uint64 start = t0 + 100;
+        vm.warp(start);
+        vm.prank(worker);
+        engine.openEpoch(tid, 1, start, start + 10, start + 20);
+        vm.prank(alice);
+        engine.depositToSide(tid, 1, 0, 1000);
+        vm.warp(start + 11);
+        vm.prank(worker);
+        engine.lockEpoch(tid, 1);
+        vm.warp(start + 21);
+        oracle.set(feed, 200e8, start + 21, 0);
+        vm.prank(worker);
+        vm.expectRevert(MockAavePool.WithdrawReverted.selector);
+        engine.resolveEpoch(tid, 1);
 
-        assertEq(engine.yieldRouterFailureCount(), 3);
-        assertTrue(engine.yieldRouterDisabled());
+        assertEq(engine.yieldRouterFailureCount(), 0);
+        assertFalse(engine.yieldRouterDisabled());
+        assertEq(uint256(engine.epochs(tid, 1).status), uint256(MarketTypes.EpochStatus.Locked));
     }
 
     function test_deposit_yieldV2_frozenReserve_emitsYieldRouterDepositFailed() public {
@@ -196,6 +195,59 @@ contract MarketEngineYieldRoutingTest is MarketEngineBase {
         engine.keeperClaimLmRewards(bytes32(0));
 
         assertEq(rewardTok.balanceOf(address(engine)), 50e18);
+    }
+
+    function test_setYieldRouter_reverts_whenOutstandingRoutedPrincipal_exists() public {
+        bytes32 tid = _tid("thr");
+        uint64 t0 = 4_500_000;
+        _initManualThresholdMarket(tid, t0);
+
+        token.mint(alice, 1000);
+        vm.startPrank(alice);
+        token.approve(address(engine), 1000);
+        engine.depositToSide(tid, 1, 0, 1000);
+        vm.stopPrank();
+
+        uint256 outstanding = engine.totalRoutedPrincipal();
+        assertGt(outstanding, 0);
+
+        YieldRouterV2 r2 =
+            new YieldRouterV2(address(token), address(pool), address(aToken), address(0), address(0), address(engine));
+
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(MarketEngineState.OutstandingRoutedPrincipal.selector, outstanding));
+        engine.setYieldRouter(address(r2), 0);
+    }
+
+    function test_setYieldRouter_allows_change_after_emergency_recovery_and_reconcile() public {
+        bytes32 tid = _tid("thr");
+        uint64 t0 = 4_600_000;
+        _initManualThresholdMarket(tid, t0);
+
+        token.mint(alice, 1000);
+        vm.startPrank(alice);
+        token.approve(address(engine), 1000);
+        engine.depositToSide(tid, 1, 0, 1000);
+        vm.stopPrank();
+
+        uint256 outstanding = engine.epochs(tid, 1).routedPrincipal;
+        assertGt(outstanding, 0);
+        assertEq(engine.totalRoutedPrincipal(), outstanding);
+
+        YieldRouterV2 r2 =
+            new YieldRouterV2(address(token), address(pool), address(aToken), address(0), address(0), address(engine));
+
+        vm.startPrank(admin);
+        engine.yieldEmergencyWithdraw(tid);
+        assertEq(engine.unreconciledRecoveredByTemplate(tid), outstanding);
+        engine.reconcileEpochRoutedPrincipal(tid, 1, outstanding);
+        engine.setYieldRouter(address(r2), 0);
+        vm.stopPrank();
+
+        assertEq(address(engine.yieldRouter()), address(r2));
+        assertEq(engine.totalRoutedPrincipal(), 0);
+        assertEq(engine.unreconciledRecoveredByTemplate(tid), 0);
+        assertEq(engine.epochs(tid, 1).routedPrincipal, 0);
     }
 
     function test_deposit_failedRouting_doesNotIncreaseEpochRoutedPrincipal() public {

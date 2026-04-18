@@ -113,6 +113,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         if (ledger.rollingPhase != MarketTypes.RollingPhase.Halted) revert RollingWrongPhase();
         uint64 hi = ledger.lastResolvedEpochId;
         if (ledger.activeEpochId > hi) hi = ledger.activeEpochId;
+        if (ledger.activeEpochId != 0 && ledger.activeEpochId != ledger.lastResolvedEpochId) revert InvalidRollingRecovery();
         if (nextRollingEpochId == 0 || nextRollingEpochId <= hi) revert InvalidRollingRecovery();
 
         ledger.rollingPhase = MarketTypes.RollingPhase.Uninitialized;
@@ -145,7 +146,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         }
 
         // Attempt yield router withdrawal before setting refund mode so tokens are in engine for claims.
-        _tryWithdrawForRollingCancel(templateId, epochId, e, ledger);
+        _tryWithdrawForRollingCancel(templateId, e, ledger);
 
         uint256 refundLiability = e.totalPool;
         if (refundLiability > 0) {
@@ -483,7 +484,18 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
             uint256 b1 = stakeToken.balanceOf(address(this));
             if (b1 < b0) revert YieldRouterBalanceInvariant();
             uint256 received = b1 - b0;
+            if (received < routedPrincipal) {
+                emit YieldRouterWithdrawFailed(templateId, epochId, routedPrincipal - received);
+                _recordYieldRouterFailure();
+                if (rollingLink) {
+                    _haltRolling(templateId, _ledgers[templateId], MarketTypes.RollingHaltReason.OracleFailure, epochId + 1);
+                    return 0;
+                }
+                revert YieldRouterShortfall(routedPrincipal, received);
+            }
             e.routedPrincipal = 0;
+            totalRoutedPrincipal -= routedPrincipal;
+            _templateRoutedPrincipal[templateId] -= routedPrincipal;
             if (received > routedPrincipal) return received - routedPrincipal;
             return 0;
         } catch {
@@ -505,25 +517,20 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
     // slither-disable-next-line reentrancy-no-eth -- nonReentrant guard on caller; admin-gated; router trusted by admin config.
     function _tryWithdrawForRollingCancel(
         bytes32 templateId,
-        uint64 epochId,
         MarketTypes.Epoch storage e,
         MarketTypes.Ledger storage ledger
     ) private {
         IYieldRouterV2 r = yieldRouter;
         if (address(r) == address(0) || yieldRouterDisabled || e.routedPrincipal == 0) return;
         uint256 rp = e.routedPrincipal;
-        uint256 b0 = stakeToken.balanceOf(address(this));
-        try r.withdrawScaled(templateId, rp) returns (uint256) {
-            e.routedPrincipal = 0;
-            uint256 gained = stakeToken.balanceOf(address(this)) - b0;
-            if (gained > rp) {
-                uint256 excess = gained - rp;
-                _vaults[templateId].fees += excess;
-                ledger.feeReserveTotal += excess;
-            }
-        } catch {
-            emit YieldRouterWithdrawFailed(templateId, epochId, rp);
-            _recordYieldRouterFailure();
+        uint256 gained = _balanceDeltaAfterWithdrawScaled(r, templateId, rp);
+        e.routedPrincipal = 0;
+        totalRoutedPrincipal -= rp;
+        _templateRoutedPrincipal[templateId] -= rp;
+        if (gained > rp) {
+            uint256 excess = gained - rp;
+            _vaults[templateId].fees += excess;
+            ledger.feeReserveTotal += excess;
         }
     }
 

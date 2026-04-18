@@ -53,6 +53,8 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
 
     event TrustedReporterUpdated(address indexed previousReporter, address indexed newReporter);
     event MaxSignatureAgeUpdated(uint256 previousSeconds, uint256 newSeconds);
+    event LockSampleCleared(bytes32 indexed marketId);
+    event ResolveResultCleared(bytes32 indexed marketId);
     event OhlcResultCleared(bytes32 indexed marketId);
 
     error ZeroAddress();
@@ -144,11 +146,13 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
     /// @notice Owner can clear a lock sample before the engine consumes it (mis-post recovery).
     function clearLockSample(bytes32 marketId) external onlyOwner {
         delete _lockSamples[marketId];
+        emit LockSampleCleared(marketId);
     }
 
     /// @notice Owner can clear a resolve sample before the engine consumes it (mis-post recovery).
     function clearResolveResult(bytes32 marketId) external onlyOwner {
         delete _resolveSamples[marketId];
+        emit ResolveResultCleared(marketId);
     }
 
     /// @notice Owner can clear an OHLC result before the engine consumes it (mis-post recovery).

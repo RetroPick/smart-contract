@@ -45,6 +45,9 @@ contract MarketEngineAdminModule is MarketEngineState {
         _authAdmin();
         if (feeBps > 10_000) revert InvalidFeeBps();
         address old = address(yieldRouter);
+        if (old != router && old != address(0) && totalRoutedPrincipal != 0) {
+            revert OutstandingRoutedPrincipal(totalRoutedPrincipal);
+        }
         yieldRouter = IYieldRouterV2(router);
         yieldFeeBps = router == address(0) ? 0 : feeBps;
         yieldRouterFailureCount = 0;
@@ -122,8 +125,46 @@ contract MarketEngineAdminModule is MarketEngineState {
         _authAdmin();
         IYieldRouterV2 r = yieldRouter;
         if (address(r) == address(0)) revert Unauthorized();
-        uint256 grossAmount = r.emergencyWithdraw(templateId);
+        uint256 balBefore = stakeToken.balanceOf(address(this));
+        r.emergencyWithdraw(templateId);
+        uint256 balAfter = stakeToken.balanceOf(address(this));
+        if (balAfter < balBefore) revert YieldRouterBalanceInvariant();
+        uint256 grossAmount;
+        unchecked {
+            grossAmount = balAfter - balBefore;
+        }
+        if (grossAmount > 0) {
+            _unreconciledRecoveredByTemplate[templateId] += grossAmount;
+        }
         emit YieldEmergencyWithdrawn(templateId, grossAmount);
+    }
+
+    function reconcileEpochRoutedPrincipal(bytes32 templateId, uint64 epochId, uint256 recoveredPrincipal) external {
+        _authAdmin();
+        if (recoveredPrincipal == 0) revert NothingToClaim();
+        MarketTypes.Epoch storage e = _epochs[templateId][epochId];
+        if (!e.exists) revert InvalidEpochState();
+        if (recoveredPrincipal > e.routedPrincipal) revert YieldRouterBalanceInvariant();
+        uint256 availableRecovered = _unreconciledRecoveredByTemplate[templateId];
+        if (recoveredPrincipal > availableRecovered) {
+            revert UnreconciledRecoveryInsufficient(templateId, availableRecovered, recoveredPrincipal);
+        }
+        unchecked {
+            e.routedPrincipal -= recoveredPrincipal;
+            totalRoutedPrincipal -= recoveredPrincipal;
+            _templateRoutedPrincipal[templateId] -= recoveredPrincipal;
+            _unreconciledRecoveredByTemplate[templateId] = availableRecovered - recoveredPrincipal;
+        }
+        if (_templateRoutedPrincipal[templateId] == 0) {
+            uint256 excessRecovered = _unreconciledRecoveredByTemplate[templateId];
+            if (excessRecovered > 0) {
+                _unreconciledRecoveredByTemplate[templateId] = 0;
+                _vaults[templateId].fees += excessRecovered;
+                _ledgers[templateId].feeReserveTotal += excessRecovered;
+                emit EmergencyRecoveredYieldBooked(templateId, excessRecovered);
+            }
+        }
+        emit EpochRoutedPrincipalReconciled(templateId, epochId, recoveredPrincipal, e.routedPrincipal);
     }
 
     function resetYieldRouterFailures() external {

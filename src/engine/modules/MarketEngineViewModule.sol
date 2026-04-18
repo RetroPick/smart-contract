@@ -56,4 +56,8 @@ contract MarketEngineViewModule is MarketEngineState {
     function getEpoch(bytes32 templateId, uint64 epochId) external view returns (MarketTypes.Epoch memory) {
         return _epochs[templateId][epochId];
     }
+
+    function unreconciledRecoveredByTemplate(bytes32 templateId) external view returns (uint256) {
+        return _unreconciledRecoveredByTemplate[templateId];
+    }
 }

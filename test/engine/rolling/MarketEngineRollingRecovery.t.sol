@@ -88,4 +88,29 @@ contract MarketEngineRollingRecoveryTest is MarketEngineBase {
         vm.expectRevert(bytes4(keccak256("ProtocolPaused()")));
         engine.cancelRollingEpochWhileHalted(tid, 1, MarketTypes.CancelReason.EmergencyPaused, false);
     }
+
+    function test_recovery_reset_reverts_when_halted_epoch_not_cleared() public {
+        vm.startPrank(admin);
+        engine.upsertTemplate(_directionRollingTemplate("rst_uncleared", INTER, 10));
+        bytes32 tid = _tid("rst_uncleared");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 630_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.genesisStartRolling(tid);
+
+        token.mint(address(this), 1e24);
+        token.approve(address(engine), type(uint256).max);
+        vm.warp(t0 + 50);
+        engine.depositToSide(tid, 1, 0, 50e18);
+
+        vm.startPrank(admin);
+        engine.haltRollingMarket(tid);
+        engine.pauseProgram(true);
+        vm.expectRevert(bytes4(keccak256("InvalidRollingRecovery()")));
+        engine.resetRollingLifecycle(tid, 2);
+        vm.stopPrank();
+    }
 }

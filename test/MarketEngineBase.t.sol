@@ -405,6 +405,9 @@ abstract contract MarketEngineBase is Test {
         dispatcher.setSelectorModule(bytes4(keccak256("setLmRewardsEnabled(bool)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("keeperClaimLmRewards(bytes32)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("yieldEmergencyWithdraw(bytes32)")), adminModule, false);
+        dispatcher.setSelectorModule(
+            bytes4(keccak256("reconcileEpochRoutedPrincipal(bytes32,uint64,uint256)")), adminModule, false
+        );
         dispatcher.setSelectorModule(bytes4(keccak256("initializeMarket(bytes32)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("withdrawFees(bytes32,uint256)")), adminModule, false);
 
@@ -414,6 +417,7 @@ abstract contract MarketEngineBase is Test {
         dispatcher.setSelectorModule(bytes4(keccak256("getVaultBalances(bytes32)")), viewModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("getRollingLifecycle(bytes32)")), viewModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("getEpoch(bytes32,uint64)")), viewModule, false);
+        dispatcher.setSelectorModule(bytes4(keccak256("unreconciledRecoveredByTemplate(bytes32)")), viewModule, false);
 
         dispatcher.setSelectorModule(
             bytes4(keccak256("depositToSide(bytes32,uint64,uint8,uint256)")), userOpsClaimsModule, false

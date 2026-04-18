@@ -18,10 +18,8 @@ contract MarketEngineLifecycleSecurity is MarketEngineBase {
 
     // ─── H10: cancelEpoch blocked by broken yield router ──────────────────────
 
-    /// @notice After fix: cancelEpoch succeeds even when yield router's withdrawScaled always reverts.
-    ///         The failure is recorded as a soft failure (YieldRouterWithdrawFailed event) but does
-    ///         not block the cancel — users can still claim refunds.
-    function test_cancelEpoch_succeedsWhenYieldRouterFails() public {
+    /// @notice Serious-TVL posture: cancelEpoch must revert when routed principal cannot be recovered.
+    function test_cancelEpoch_revertsWhenYieldRouterFails() public {
         bytes32 tid = _tid("eth-cancel");
         vm.startPrank(admin);
         engine.upsertTemplate(_defaultThresholdTemplate("eth-cancel"));
@@ -41,14 +39,9 @@ contract MarketEngineLifecycleSecurity is MarketEngineBase {
         engine.depositToSide(tid, 1, 0, 1000e18);
         vm.stopPrank();
 
-        // After fix: does not revert with YieldWithdrawFailed
         vm.prank(admin);
+        vm.expectRevert(MockBrokenYieldRouter.WithdrawAlwaysFails.selector);
         engine.cancelEpoch(tid, 1, MarketTypes.CancelReason.ManualAdminCancel, false);
-
-        // Alice can claim refund
-        vm.prank(alice);
-        engine.claim(tid, 1);
-        assertGt(token.balanceOf(alice), 0, "Alice should receive refund after cancel");
     }
 
     /// @notice cancelEpoch with no yield router must still work correctly.
@@ -81,9 +74,8 @@ contract MarketEngineLifecycleSecurity is MarketEngineBase {
 
     // ─── H15: cancelRollingEpochWhileHalted missing yield withdrawal ──────────
 
-    /// @notice After fix: cancelRollingEpochWhileHalted attempts yield withdrawal,
-    ///         and users can still claim even when the router is broken.
-    function test_cancelRollingWhileHalted_withBrokenYieldRouter() public {
+    /// @notice Serious-TVL posture: rolling cancel must also revert if routed principal cannot be recovered.
+    function test_cancelRollingWhileHalted_reverts_withBrokenYieldRouter() public {
         bytes32 tid = _tid("eth-roll-cancel");
         vm.startPrank(admin);
         engine.upsertTemplate(_directionRollingTemplate("eth-roll-cancel", 100, 10));
@@ -108,13 +100,9 @@ contract MarketEngineLifecycleSecurity is MarketEngineBase {
         engine.pauseProgram(true);
         vm.stopPrank();
 
-        // After fix: does not revert; soft-fails yield withdrawal
         vm.prank(admin);
+        vm.expectRevert(MockBrokenYieldRouter.WithdrawAlwaysFails.selector);
         engine.cancelRollingEpochWhileHalted(tid, 1, MarketTypes.CancelReason.ManualAdminCancel, false);
-
-        vm.prank(alice);
-        engine.claim(tid, 1);
-        assertGt(token.balanceOf(alice), 0, "Alice should receive refund after rolling cancel");
     }
 
     /// @notice Rolling cancel with no yield router works correctly.

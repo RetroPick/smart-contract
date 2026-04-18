@@ -51,6 +51,36 @@ contract TrustedReporterAdapterSecurity is Test {
         adapter.clearOhlcResult(MARKET_ID);
     }
 
+    function test_clearLockSample_emitsEvent() public {
+        uint64 t = uint64(block.timestamp);
+        bytes memory sig = _signLock(MARKET_ID, 1800e8, t, DS);
+        adapter.postLockSample(MARKET_ID, 1800e8, t, DS, sig);
+
+        vm.expectEmit(true, true, true, true);
+        emit TrustedReporterAdapter.LockSampleCleared(MARKET_ID);
+
+        vm.prank(owner);
+        adapter.clearLockSample(MARKET_ID);
+
+        (, , bool written) = adapter.getLockSample(MARKET_ID);
+        assertFalse(written, "lock sample should be cleared");
+    }
+
+    function test_clearResolveResult_emitsEvent() public {
+        uint64 t = uint64(block.timestamp);
+        bytes memory sig = _signResolve(MARKET_ID, 1850e8, t, DS);
+        adapter.postResolveResult(MARKET_ID, 1850e8, t, DS, sig);
+
+        vm.expectEmit(true, true, true, true);
+        emit TrustedReporterAdapter.ResolveResultCleared(MARKET_ID);
+
+        vm.prank(owner);
+        adapter.clearResolveResult(MARKET_ID);
+
+        (, bool resolved) = adapter.getResult(MARKET_ID);
+        assertFalse(resolved, "resolve result should be cleared");
+    }
+
     /// @notice Non-owner cannot clear any result.
     function test_clearResolveResult_onlyOwner() public {
         vm.prank(address(0xBAD));
@@ -72,6 +102,16 @@ contract TrustedReporterAdapterSecurity is Test {
         returns (bytes memory)
     {
         bytes32 digest = adapter.hashResolveClaim(marketId, valueE8, observedAt, ds);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(REPORTER_PK, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _signLock(bytes32 marketId, int256 valueE8, uint64 observedAt, bytes32 ds)
+        internal
+        view
+        returns (bytes memory)
+    {
+        bytes32 digest = adapter.hashLockClaim(marketId, valueE8, observedAt, ds);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(REPORTER_PK, digest);
         return abi.encodePacked(r, s, v);
     }
