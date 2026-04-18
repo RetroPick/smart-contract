@@ -85,6 +85,7 @@ interface IMarketEngine {
     event EpochCancelled(bytes32 indexed templateId, uint64 indexed epochId, uint8 reason);
     event Claimed(bytes32 indexed templateId, uint64 indexed epochId, address indexed user, uint256 amount);
     event FeesWithdrawn(bytes32 indexed templateId, uint256 amount);
+    event YieldEmergencyWithdrawn(bytes32 indexed templateId, uint256 grossAmount);
 
     /// @dev Single calldata struct keeps `forge coverage` (no `viaIR`) from stack-overflowing this initializer.
     struct InitConfig {

@@ -120,7 +120,7 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
 
     /// @notice Full unwind for `templateId`. Skips `ReservePaused` checks so funds can exit if Aave gates normal withdrawals.
     function emergencyWithdraw(bytes32 templateId) external override returns (uint256 grossAmount) {
-        if (msg.sender != ENGINE && msg.sender != owner()) revert Unauthorized();
+        if (msg.sender != ENGINE) revert OnlyEngine();
         TemplateYield storage t = _templates[templateId];
         uint256 p = t.principal;
         if (p == 0) return 0;
@@ -331,9 +331,11 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
         if (isPaused) revert ReservePaused();
     }
 
-    /// @notice Rescue stray ERC20 (not collateral underlying or aToken).
+    /// @notice Rescue stray ERC20 (not collateral underlying, aToken, or stata share token).
     function rescueToken(address token, address to, uint256 amount) external onlyOwner {
-        if (token == address(A_TOKEN) || token == address(STAKE_TOKEN)) revert InvalidAddress();
+        if (token == address(A_TOKEN) || token == address(STAKE_TOKEN) || token == address(STATA_TOKEN)) {
+            revert InvalidAddress();
+        }
         IERC20(token).safeTransfer(to, amount);
     }
 }

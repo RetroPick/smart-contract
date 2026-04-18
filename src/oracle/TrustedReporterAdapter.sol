@@ -53,6 +53,7 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
 
     event TrustedReporterUpdated(address indexed previousReporter, address indexed newReporter);
     event MaxSignatureAgeUpdated(uint256 previousSeconds, uint256 newSeconds);
+    event OhlcResultCleared(bytes32 indexed marketId);
 
     error ZeroAddress();
     error AlreadyResolved();
@@ -148,6 +149,13 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
     /// @notice Owner can clear a resolve sample before the engine consumes it (mis-post recovery).
     function clearResolveResult(bytes32 marketId) external onlyOwner {
         delete _resolveSamples[marketId];
+    }
+
+    /// @notice Owner can clear an OHLC result before the engine consumes it (mis-post recovery).
+    /// @dev Clearing OHLC restores the ability to post a scalar resolve result for the same marketId.
+    function clearOhlcResult(bytes32 marketId) external onlyOwner {
+        delete _ohlcSamples[marketId];
+        emit OhlcResultCleared(marketId);
     }
 
     /// @dev OHLC and scalar resolve are mutually exclusive: posting one forbids the other for the same `marketId`.

@@ -144,6 +144,9 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
             revert InvalidEpochState();
         }
 
+        // Attempt yield router withdrawal before setting refund mode so tokens are in engine for claims.
+        _tryWithdrawForRollingCancel(templateId, epochId, e, ledger);
+
         uint256 refundLiability = e.totalPool;
         if (refundLiability > 0) {
             _vaults[templateId].active -= refundLiability;
@@ -496,6 +499,31 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
                 return 0;
             }
             return 0;
+        }
+    }
+
+    // slither-disable-next-line reentrancy-no-eth -- nonReentrant guard on caller; admin-gated; router trusted by admin config.
+    function _tryWithdrawForRollingCancel(
+        bytes32 templateId,
+        uint64 epochId,
+        MarketTypes.Epoch storage e,
+        MarketTypes.Ledger storage ledger
+    ) private {
+        IYieldRouterV2 r = yieldRouter;
+        if (address(r) == address(0) || yieldRouterDisabled || e.routedPrincipal == 0) return;
+        uint256 rp = e.routedPrincipal;
+        uint256 b0 = stakeToken.balanceOf(address(this));
+        try r.withdrawScaled(templateId, rp) returns (uint256) {
+            e.routedPrincipal = 0;
+            uint256 gained = stakeToken.balanceOf(address(this)) - b0;
+            if (gained > rp) {
+                uint256 excess = gained - rp;
+                _vaults[templateId].fees += excess;
+                ledger.feeReserveTotal += excess;
+            }
+        } catch {
+            emit YieldRouterWithdrawFailed(templateId, epochId, rp);
+            _recordYieldRouterFailure();
         }
     }
 

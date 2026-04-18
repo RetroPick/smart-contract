@@ -208,11 +208,11 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         IYieldRouterV2 r = yieldRouter;
         if (address(r) != address(0) && e.routedPrincipal > 0) {
             uint256 routedPrincipal = e.routedPrincipal;
-            if (routedPrincipal > 0) {
-                if (!_tryWithdrawRoutedForCancel(r, templateId, epochId, routedPrincipal, ledger)) {
-                    emit YieldRouterWithdrawFailed(templateId, epochId, routedPrincipal);
-                    revert YieldWithdrawFailed();
-                }
+            if (!_tryWithdrawRoutedForCancel(r, templateId, epochId, routedPrincipal, ledger)) {
+                emit YieldRouterWithdrawFailed(templateId, epochId, routedPrincipal);
+                _recordYieldRouterFailure();
+                // Do NOT revert: allow cancel to proceed. Principal recovery is possible via
+                // admin yieldEmergencyWithdraw after the yield router is repaired.
             }
         }
 

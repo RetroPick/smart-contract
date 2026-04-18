@@ -151,7 +151,7 @@ contract YieldRouterV2Test is Test {
 
     function test_emergencyWithdraw_reverts_unauthorized_and_returns_zero_when_empty() public {
         vm.prank(address(0xABCD));
-        vm.expectRevert(YieldRouterV2.Unauthorized.selector);
+        vm.expectRevert(YieldRouterV2.OnlyEngine.selector);
         router.emergencyWithdraw(tid);
 
         vm.prank(engine);

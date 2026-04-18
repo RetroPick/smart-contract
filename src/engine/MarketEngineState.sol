@@ -203,6 +203,7 @@ abstract contract MarketEngineState {
     event EpochCancelled(bytes32 indexed templateId, uint64 indexed epochId, uint8 reason);
     event Claimed(bytes32 indexed templateId, uint64 indexed epochId, address indexed user, uint256 amount);
     event FeesWithdrawn(bytes32 indexed templateId, uint256 amount);
+    event YieldEmergencyWithdrawn(bytes32 indexed templateId, uint256 grossAmount);
     event RollingGenesisStarted(bytes32 indexed templateId, uint64 epochId, uint64 lockAt, uint64 resolveAt);
     event RollingGenesisLocked(bytes32 indexed templateId, uint64 lockedEpochId, uint64 newOpenEpochId);
     event RollingRoundExecuted(

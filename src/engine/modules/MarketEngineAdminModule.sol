@@ -113,8 +113,8 @@ contract MarketEngineAdminModule is MarketEngineState {
         _authAdmin();
         IYieldRouterV2 r = yieldRouter;
         if (address(r) == address(0)) revert Unauthorized();
-        // slither-disable-next-line unused-return -- gross underlying is transferred to engine by router; no local use.
-        r.emergencyWithdraw(templateId);
+        uint256 grossAmount = r.emergencyWithdraw(templateId);
+        emit YieldEmergencyWithdrawn(templateId, grossAmount);
     }
 
     function resetYieldRouterFailures() external {
@@ -147,9 +147,9 @@ contract MarketEngineAdminModule is MarketEngineState {
         if (!ledger.initialized) revert InvalidTemplate();
         if (ledger.feeReserveTotal < amount) revert NothingToClaim();
 
-        stakeToken.safeTransfer(treasury, amount);
         MarketMath.releaseFeeOnWithdraw(ledger, amount);
         _vaults[templateId].fees -= amount;
+        stakeToken.safeTransfer(treasury, amount);
         emit FeesWithdrawn(templateId, amount);
     }
 }
