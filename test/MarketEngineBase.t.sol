@@ -401,6 +401,7 @@ abstract contract MarketEngineBase is Test {
         dispatcher.setSelectorModule(bytes4(keccak256("setSmartDataOracle(address)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setMacroOracle(address)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setEquityOracle(address)")), adminModule, false);
+        dispatcher.setSelectorModule(bytes4(keccak256("resetOracleCursor(bytes32,bytes32)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("setLmRewardsEnabled(bool)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("keeperClaimLmRewards(bytes32)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("yieldEmergencyWithdraw(bytes32)")), adminModule, false);

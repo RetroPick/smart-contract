@@ -29,6 +29,51 @@ contract MarketEngineUserOpsClaimsBranchesTest is MarketEngineBase {
         engine.claimMany(tid, epochIds);
     }
 
+    function test_claimMany_skips_epochs_that_become_already_claimed_mid_batch() public {
+        vm.startPrank(admin);
+        engine.upsertTemplate(_defaultThresholdTemplate("claim-many-soft-skip"));
+        bytes32 tid = _tid("claim-many-soft-skip");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        address loser = address(0xB0B);
+        uint64 t0 = 8_000_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.openEpoch(tid, 1, t0, t0 + 100, t0 + 200);
+
+        token.mint(address(this), 1000e18);
+        token.approve(address(engine), type(uint256).max);
+        engine.depositToSide(tid, 1, 0, 1000e18);
+
+        token.mint(loser, 1000e18);
+        vm.startPrank(loser);
+        token.approve(address(engine), type(uint256).max);
+        engine.depositToSide(tid, 1, 1, 1000e18);
+        vm.stopPrank();
+
+        vm.warp(t0 + 201);
+        oracle.set(feed, 200e8, uint64(t0 + 201), 0);
+        vm.prank(worker);
+        engine.lockEpoch(tid, 1);
+
+        vm.warp(t0 + 202);
+        oracle.set(feed, 200e8, uint64(t0 + 202), 0);
+        vm.prank(worker);
+        engine.resolveEpoch(tid, 1);
+
+        uint64[] memory epochIds = new uint64[](2);
+        epochIds[0] = 1;
+        epochIds[1] = 1;
+
+        uint256 balBefore = token.balanceOf(address(this));
+        engine.claimMany(tid, epochIds);
+        uint256 claimed = token.balanceOf(address(this)) - balBefore;
+
+        assertGt(claimed, 1000e18);
+        assertEq(engine.getEpoch(tid, 1).claimedTotal, claimed);
+    }
+
     function test_switchSide_revertsPartialSwitchWhenSingleSideOnly() public {
         MarketEngine.UpsertTemplateParams memory p = _defaultThresholdTemplate("single-side-switch");
         p.allowMultiSidePositions = false;

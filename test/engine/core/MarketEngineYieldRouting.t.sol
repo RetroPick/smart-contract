@@ -223,6 +223,33 @@ contract MarketEngineYieldRoutingTest is MarketEngineBase {
         assertEq(e.routedPrincipal, 0);
     }
 
+    function test_deposit_failedRouting_clears_router_allowance() public {
+        bytes32 tid = _tid("thr-allowance-reset");
+        uint64 t0 = 3_050_000;
+        vm.prank(admin);
+        engine.upsertTemplate(_defaultThresholdTemplate("thr-allowance-reset"));
+        vm.prank(admin);
+        engine.initializeMarket(tid);
+
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.openEpoch(tid, 1, uint64(t0), uint64(t0 + 10), uint64(t0 + 20));
+
+        token.mint(alice, 1000);
+        vm.startPrank(alice);
+        token.approve(address(engine), 1000);
+
+        uint256 route = (1000 * 9500) / 10_000;
+        vm.expectEmit(true, true, true, true);
+        emit MarketEngineState.YieldRouterDepositFailed(tid, route);
+        vm.mockCallRevert(address(router), abi.encodeWithSelector(router.depositScaled.selector, tid, route), hex"01");
+        engine.depositToSide(tid, 1, 0, 1000);
+        vm.clearMockedCalls();
+        vm.stopPrank();
+
+        assertEq(token.allowance(address(engine), address(router)), 0);
+    }
+
     function test_resolve_skipsWithdraw_whenNoRoutedPrincipal() public {
         bytes32 tid = _tid("thr");
         uint64 t0 = 3_100_000;
@@ -260,4 +287,3 @@ contract MarketEngineYieldRoutingTest is MarketEngineBase {
         assertEq(engine.yieldRouterFailureCount(), 0);
     }
 }
-

@@ -88,6 +88,15 @@ contract MarketEngineAdminModule is MarketEngineState {
         emit EquityOracleSet(old, oracle);
     }
 
+    function resetOracleCursor(bytes32 templateId, bytes32 feedId) external {
+        _authAdmin();
+        if (_templates[templateId].version == 0) revert InvalidTemplate();
+        if (feedId == bytes32(0)) revert InvalidOracleFeed();
+        delete lastOracleCursorByTemplateFeed[templateId][feedId];
+        delete oracleCursorUsesRoundId[templateId][feedId];
+        emit OracleCursorReset(templateId, feedId);
+    }
+
     function setLmRewardsEnabled(bool enabled) external {
         _authAdmin();
         if (enabled && address(yieldRouter) == address(0)) revert Unauthorized();

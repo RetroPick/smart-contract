@@ -113,6 +113,7 @@ interface IMarketEngine {
     function setSmartDataOracle(address oracle) external;
     function setMacroOracle(address oracle) external;
     function setEquityOracle(address oracle) external;
+    function resetOracleCursor(bytes32 templateId, bytes32 feedId) external;
     function setLmRewardsEnabled(bool enabled) external;
     function keeperClaimLmRewards(bytes32 templateId) external;
     function setDepositExecutor(address account, bool allowed) external;

@@ -83,8 +83,8 @@ contract MarketEngineReentrancyTest is MarketEngineBase {
         assertEq(e.totalPool, 1000 ether);
     }
 
-    /// @dev `resolveEpoch` is `nonReentrant`; malicious `withdrawScaled` must not reenter `depositToSideFor`.
-    function test_resolveEpoch_revertsOnYieldRouterReentrancy() public {
+    /// @dev `resolveEpoch` catches failed yield-router withdrawals; reentrancy must degrade into a recorded router failure.
+    function test_resolveEpoch_recordsFailureOnYieldRouterReentrancy() public {
         bytes32 tid = _tid("re-resolve");
         uint64 t0 = 7_000_000;
         vm.prank(admin);
@@ -113,8 +113,14 @@ contract MarketEngineReentrancyTest is MarketEngineBase {
 
         vm.warp(t0 + 210);
         oracle.set(feed, 200e8, uint64(t0 + 210), 0);
+
         vm.prank(worker);
-        vm.expectRevert(ReentrancyGuardTransient.ReentrancyGuardReentrantCall.selector);
+        vm.expectEmit(true, true, true, true);
+        emit MarketEngineState.YieldRouterWithdrawFailed(tid, 1, (1000 ether * 9500) / 10_000);
         engine.resolveEpoch(tid, 1);
+
+        assertEq(engine.yieldRouterFailureCount(), 1);
+        MarketTypes.Epoch memory e = engine.getEpoch(tid, 1);
+        assertTrue(e.claimable);
     }
 }

@@ -223,6 +223,7 @@ abstract contract MarketEngineState {
     event SmartDataOracleSet(address indexed previousOracle, address indexed newOracle);
     event MacroOracleSet(address indexed previousOracle, address indexed newOracle);
     event EquityOracleSet(address indexed previousOracle, address indexed newOracle);
+    event OracleCursorReset(bytes32 indexed templateId, bytes32 indexed feedId);
 
     modifier onlyAdmin() {
         if (!configInitialized) revert NotInitialized();

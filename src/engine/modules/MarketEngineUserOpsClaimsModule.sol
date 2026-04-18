@@ -106,9 +106,13 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
 
     function claimMany(bytes32 templateId, uint64[] calldata epochIds) external nonReentrant {
         _validateBatchSize(epochIds.length);
+        if (!configInitialized) revert Unauthorized();
+        MarketTypes.Ledger storage ledger = _ledgers[templateId];
+        if (!ledger.initialized) revert InvalidTemplate();
         uint256 total = 0;
         for (uint256 i = 0; i < epochIds.length; i++) {
-            uint256 amt = _claimOne(templateId, epochIds[i], msg.sender);
+            uint256 amt = _claimOneIfClaimable(templateId, epochIds[i], msg.sender, ledger);
+            if (amt == 0) continue;
             total += amt;
             emit Claimed(templateId, epochIds[i], msg.sender, amt);
         }
@@ -184,6 +188,7 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
                 catch {
                     emit YieldRouterDepositFailed(templateId, routeAmount);
                 }
+                stakeToken.forceApprove(address(r), 0);
             }
         }
         emit PositionDeposited(templateId, epochId, beneficiary, outcomeIndex, amount);
@@ -211,6 +216,37 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
         }
 
         if (amount == 0) revert NothingToClaim();
+        pos.claimedAmount = amount;
+        pos.claimed = true;
+        e.claimedTotal += amount;
+        if (!e.refundMode) e.remainingWinningStake -= winningStake;
+
+        MarketMath.releaseClaimOnWithdraw(ledger, amount);
+        _vaults[templateId].claims -= amount;
+    }
+
+    function _claimOneIfClaimable(bytes32 templateId, uint64 epochId, address user, MarketTypes.Ledger storage ledger)
+        internal
+        returns (uint256 amount)
+    {
+        MarketTypes.Epoch storage e = _epochs[templateId][epochId];
+        if (!e.claimable) return 0;
+
+        bytes32 pk = positionKey(templateId, epochId);
+        MarketTypes.Position storage pos = _positions[pk][user];
+        if (pos.claimed) return 0;
+
+        uint256 winningStake;
+        if (e.refundMode) {
+            amount = MarketMath.computeRefundTotal(pos.totalStake);
+            winningStake = 0;
+        } else {
+            uint256[8] memory stakes = pos.stakes;
+            uint256 remainingClaims = e.claimLiabilityTotal - e.claimedTotal;
+            (amount, winningStake) = MarketMath.computeClaimPayoutStorage(e, stakes, remainingClaims);
+        }
+
+        if (amount == 0) return 0;
         pos.claimedAmount = amount;
         pos.claimed = true;
         e.claimedTotal += amount;
