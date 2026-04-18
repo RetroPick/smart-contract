@@ -30,8 +30,7 @@ test-ledger
 .docs
 
 .docs/*
-.agent/*
-.agents/*
+
 .cursor/*
 .reports/*
 .cache/*
