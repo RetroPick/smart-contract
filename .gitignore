@@ -37,3 +37,4 @@ test-ledger
 .cache/*
 .scripts/*
 lib/*
+.audit/*
