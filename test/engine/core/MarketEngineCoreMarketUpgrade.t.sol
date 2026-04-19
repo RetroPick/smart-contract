@@ -3,6 +3,7 @@ pragma solidity 0.8.24;
 
 import {MarketEngineBase} from "../../MarketEngineBase.t.sol";
 import {IMarketEngine as MarketEngine} from "../../../src/engine/IMarketEngine.sol";
+import {MarketEngineState} from "../../../src/engine/MarketEngineState.sol";
 import {MarketTypes} from "../../../src/types/MarketTypes.sol";
 import {MockPriceOracle} from "../../../src/test/MockPriceOracle.sol";
 import {MockPriceOracleWithRoundId} from "../../../src/test/MockPriceOracleWithRoundId.sol";
@@ -164,28 +165,160 @@ contract MarketEngineCoreMarketUpgradeTest is MarketEngineBase {
         vm.prank(admin);
         engine.cancelEpoch(tid, 1, MarketTypes.CancelReason.ManualAdminCancel, false);
 
+        vm.startPrank(admin);
+        engine.pauseProgram(true);
+        engine.setRateOracle(address(rateB));
+        engine.resetOracleCursor(tid, feed);
+        engine.pauseProgram(false);
+        vm.stopPrank();
+
         uint64 t1 = 31_000;
         vm.warp(t1);
         vm.prank(worker);
         engine.openEpoch(tid, 2, t1 + 10, t1 + 100, t1 + 200);
 
-        vm.prank(admin);
-        engine.setRateOracle(address(rateB));
-
         rateB.set(feed, 1, 120e8, t1 + 100, 0);
         vm.warp(t1 + 100);
-        vm.prank(worker);
-        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("OracleSampleNotMonotonic(uint80,uint80,uint64,uint64)")), uint80(1), uint80(100), uint64(t1 + 100), uint64(t0 + 100)));
-        engine.lockEpoch(tid, 2);
-
-        vm.prank(admin);
-        engine.resetOracleCursor(tid, feed);
-
         vm.prank(worker);
         engine.lockEpoch(tid, 2);
 
         MarketTypes.Epoch memory e = engine.getEpoch(tid, 2);
         assertTrue(e.checkpointA.written);
         assertEq(e.checkpointA.valueE8, 120e8);
+    }
+
+    function test_rate_oracle_replacement_reverts_while_live_epoch_is_open() public {
+        MockPriceOracle rateA = new MockPriceOracle();
+        MockPriceOracle rateB = new MockPriceOracle();
+
+        vm.startPrank(admin);
+        engine.setRateOracle(address(rateA));
+        MarketEngine.UpsertTemplateParams memory p = _defaultThresholdTemplate("rate-live-replace");
+        p.oracleClass = MarketTypes.OracleClass.CHAINLINK_RATE;
+        p.absoluteThresholdValueE8 = 100e8;
+        engine.upsertTemplate(p);
+        bytes32 tid = _tid("rate-live-replace");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 33_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.openEpoch(tid, 1, t0 + 10, t0 + 100, t0 + 200);
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(MarketEngineState.OracleAdapterChangeRequiresPause.selector, address(rateA), address(rateB))
+        );
+        engine.setRateOracle(address(rateB));
+    }
+
+    function test_paused_rate_oracle_replacement_between_epochs_is_allowed() public {
+        MockPriceOracleWithRoundId rateA = new MockPriceOracleWithRoundId();
+        MockPriceOracleWithRoundId rateB = new MockPriceOracleWithRoundId();
+
+        vm.startPrank(admin);
+        engine.setRateOracle(address(rateA));
+        engine.upsertTemplate(_bitcoinIrcDirectionTemplate("rate-paused-replace"));
+        bytes32 tid = _tid("rate-paused-replace");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 34_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.openEpoch(tid, 1, t0 + 10, t0 + 100, t0 + 200);
+
+        rateA.set(feed, 100, 100e8, t0 + 100, 0);
+        vm.warp(t0 + 100);
+        vm.prank(worker);
+        engine.lockEpoch(tid, 1);
+
+        vm.prank(admin);
+        engine.cancelEpoch(tid, 1, MarketTypes.CancelReason.ManualAdminCancel, false);
+
+        vm.startPrank(admin);
+        engine.pauseProgram(true);
+        engine.setRateOracle(address(rateB));
+        engine.resetOracleCursor(tid, feed);
+        engine.pauseProgram(false);
+        vm.stopPrank();
+    }
+
+    function test_paused_rate_oracle_replacement_does_not_change_active_epoch_source() public {
+        MockPriceOracle rateA = new MockPriceOracle();
+        MockPriceOracle rateB = new MockPriceOracle();
+
+        vm.startPrank(admin);
+        engine.setRateOracle(address(rateA));
+        MarketEngine.UpsertTemplateParams memory p = _defaultThresholdTemplate("rate-source-snapshot");
+        p.oracleClass = MarketTypes.OracleClass.CHAINLINK_RATE;
+        p.absoluteThresholdValueE8 = 100e8;
+        engine.upsertTemplate(p);
+        bytes32 tid = _tid("rate-source-snapshot");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        token.mint(address(this), 1_000e18);
+        token.approve(address(engine), type(uint256).max);
+
+        uint64 t0 = 35_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.openEpoch(tid, 1, t0 + 100, t0 + 200, t0 + 300);
+
+        vm.warp(t0 + 150);
+        engine.depositToSide(tid, 1, 1, 400e18);
+
+        vm.startPrank(admin);
+        engine.pauseProgram(true);
+        engine.setRateOracle(address(rateB));
+        engine.pauseProgram(false);
+        vm.stopPrank();
+
+        vm.warp(t0 + 200);
+        vm.prank(worker);
+        engine.lockEpoch(tid, 1);
+
+        rateA.set(feed, 80e8, t0 + 300, 0);
+        rateB.set(feed, 120e8, t0 + 300, 0);
+        vm.warp(t0 + 300);
+        vm.prank(worker);
+        engine.resolveEpoch(tid, 1);
+
+        MarketTypes.Epoch memory e = engine.getEpoch(tid, 1);
+        assertEq(e.winningOutcomeMask, 1 << 1);
+    }
+
+    function test_reset_oracle_cursor_reverts_while_manual_epoch_locked() public {
+        MockPriceOracleWithRoundId rate = new MockPriceOracleWithRoundId();
+
+        vm.startPrank(admin);
+        engine.setRateOracle(address(rate));
+        engine.upsertTemplate(_bitcoinIrcDirectionTemplate("rate-cursor-live-reset"));
+        bytes32 tid = _tid("rate-cursor-live-reset");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 32_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.openEpoch(tid, 1, t0 + 10, t0 + 100, t0 + 200);
+
+        rate.set(feed, 100, 100e8, t0 + 100, 0);
+        vm.warp(t0 + 100);
+        vm.prank(worker);
+        engine.lockEpoch(tid, 1);
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MarketEngineState.OracleCursorResetWhileEpochActive.selector,
+                tid,
+                uint64(1),
+                uint8(MarketTypes.EpochStatus.Locked)
+            )
+        );
+        engine.resetOracleCursor(tid, feed);
     }
 }

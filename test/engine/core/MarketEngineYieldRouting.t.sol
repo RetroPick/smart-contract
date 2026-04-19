@@ -238,10 +238,12 @@ contract MarketEngineYieldRoutingTest is MarketEngineBase {
             new YieldRouterV2(address(token), address(pool), address(aToken), address(0), address(0), address(engine));
 
         vm.startPrank(admin);
+        engine.pauseProgram(true);
         engine.yieldEmergencyWithdraw(tid);
         assertEq(engine.unreconciledRecoveredByTemplate(tid), outstanding);
         engine.reconcileEpochRoutedPrincipal(tid, 1, outstanding);
         engine.setYieldRouter(address(r2), 0);
+        engine.pauseProgram(false);
         vm.stopPrank();
 
         assertEq(address(engine.yieldRouter()), address(r2));

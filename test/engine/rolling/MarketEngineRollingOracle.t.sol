@@ -3,10 +3,12 @@ pragma solidity 0.8.24;
 
 import {MarketEngineBase} from "../../MarketEngineBase.t.sol";
 import {IMarketEngine as MarketEngine} from "../../../src/engine/IMarketEngine.sol";
+import {MarketEngineState} from "../../../src/engine/MarketEngineState.sol";
 import {MarketTypes} from "../../../src/types/MarketTypes.sol";
 import {IPriceOracle} from "../../../src/interfaces/IPriceOracle.sol";
 import {MockAavePool} from "../../../src/test/MockAavePool.sol";
 import {MockAToken} from "../../../src/test/MockAToken.sol";
+import {MockPriceOracle} from "../../../src/test/MockPriceOracle.sol";
 import {YieldRouterAaveV3} from "../../../src/yield/YieldRouterAaveV3.sol";
 
 /// @notice Rolling oracle and timing: buffers, confidence, early calls, batch.
@@ -224,6 +226,78 @@ contract MarketEngineRollingOracleTest is MarketEngineBase {
         engine.genesisLockRolling(tid);
     }
 
+    function test_reset_oracle_cursor_reverts_while_rolling_epoch_open() public {
+        vm.startPrank(admin);
+        engine.upsertTemplate(_directionRollingTemplate("rolling_cursor_live_reset", INTER, 10));
+        bytes32 tid = _tid("rolling_cursor_live_reset");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 461_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.genesisStartRolling(tid);
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MarketEngineState.OracleCursorResetWhileEpochActive.selector,
+                tid,
+                uint64(1),
+                uint8(MarketTypes.EpochStatus.Open)
+            )
+        );
+        engine.resetOracleCursor(tid, feed);
+    }
+
+    function test_rolling_halts_when_prev_and_cur_epoch_oracle_snapshots_differ() public {
+        MockPriceOracle rateA = new MockPriceOracle();
+        MockPriceOracle rateB = new MockPriceOracle();
+
+        vm.startPrank(admin);
+        engine.setRateOracle(address(rateA));
+        MarketEngine.UpsertTemplateParams memory p = _directionRollingTemplate("rolling_oracle_snapshot_mismatch", INTER, 10);
+        p.oracleClass = MarketTypes.OracleClass.CHAINLINK_RATE;
+        engine.upsertTemplate(p);
+        bytes32 tid = _tid("rolling_oracle_snapshot_mismatch");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 462_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.genesisStartRolling(tid);
+
+        token.mint(address(this), 1e24);
+        token.approve(address(engine), type(uint256).max);
+        vm.warp(t0 + 10);
+        engine.depositToSide(tid, 1, 0, 20e18);
+
+        vm.startPrank(admin);
+        engine.pauseProgram(true);
+        engine.setRateOracle(address(rateB));
+        engine.pauseProgram(false);
+        vm.stopPrank();
+
+        uint64 lockTs = t0 + INTER;
+        vm.warp(lockTs);
+        rateA.set(feed, 100e8, lockTs, 0);
+        rateB.set(feed, 100e8, lockTs, 0);
+        vm.prank(worker);
+        engine.genesisLockRolling(tid);
+
+        uint64 execTs = t0 + 2 * INTER;
+        vm.warp(execTs);
+        rateA.set(feed, 110e8, execTs, 0);
+        rateB.set(feed, 110e8, execTs, 0);
+        vm.prank(worker);
+        engine.executeRollingRound(tid);
+
+        (MarketTypes.RollingPhase phase, MarketTypes.RollingHaltReason reason,,,,) = engine.getRollingLifecycle(tid);
+        assertEq(uint8(phase), uint8(MarketTypes.RollingPhase.Halted));
+        assertEq(uint8(reason), uint8(MarketTypes.RollingHaltReason.OracleFailure));
+    }
+
     /// @dev Batch loops templates: oracle failure on one feed does not stop the other template in the same tx.
     function test_rolling_execute_round_batch_one_halts_one_ok() public {
         bytes32 feedB = keccak256("feed_b");
@@ -333,6 +407,74 @@ contract MarketEngineRollingOracleTest is MarketEngineBase {
         (MarketTypes.RollingPhase phase, MarketTypes.RollingHaltReason reason,,,,) = engine.getRollingLifecycle(tid);
         assertEq(uint8(phase), uint8(MarketTypes.RollingPhase.Halted));
         assertEq(uint8(reason), uint8(MarketTypes.RollingHaltReason.OracleFailure));
+    }
+
+    function test_disabledRouter_blocks_new_routing_on_deposit() public {
+        MockAToken aToken = new MockAToken();
+        MockAavePool pool = new MockAavePool(address(token), address(aToken));
+        YieldRouterAaveV3 router =
+            new YieldRouterAaveV3(address(token), address(pool), address(aToken), address(engine));
+
+        vm.prank(admin);
+        engine.setYieldRouter(address(router), 0);
+
+        token.mint(address(this), 1e24);
+        token.approve(address(engine), type(uint256).max);
+
+        uint64[3] memory starts = [uint64(500_000), uint64(501_000), uint64(502_000)];
+        string[3] memory slugs = ["disable_a", "disable_b", "disable_c"];
+
+        for (uint256 i = 0; i < 3; ++i) {
+            vm.startPrank(admin);
+            engine.upsertTemplate(_directionRollingTemplate(slugs[i], INTER, 10));
+            engine.initializeMarket(_tid(slugs[i]));
+            vm.stopPrank();
+
+            bytes32 tid = _tid(slugs[i]);
+            uint64 t0 = starts[i];
+
+            vm.warp(t0);
+            vm.prank(worker);
+            engine.genesisStartRolling(tid);
+
+            vm.warp(t0 + 50);
+            engine.depositToSide(tid, 1, 0, 20e18);
+
+            vm.warp(t0 + INTER);
+            oracle.set(feed, 100e8, t0 + INTER, 0);
+            vm.prank(worker);
+            engine.genesisLockRolling(tid);
+
+            vm.warp(t0 + 150);
+            engine.depositToSide(tid, 2, 0, 20e18);
+
+            pool.setRevertWithdraw(true);
+            vm.warp(t0 + 2 * INTER);
+            oracle.set(feed, 120e8, t0 + 2 * INTER, 0);
+            vm.prank(worker);
+            engine.executeRollingRound(tid);
+        }
+
+        assertEq(engine.yieldRouterFailureCount(), 3);
+        assertTrue(engine.yieldRouterDisabled());
+
+        vm.startPrank(admin);
+        engine.upsertTemplate(_defaultThresholdTemplate("disabled-manual"));
+        bytes32 manualTid = _tid("disabled-manual");
+        engine.initializeMarket(manualTid);
+        vm.stopPrank();
+
+        uint64 t0Manual = 503_000;
+        vm.warp(t0Manual);
+        vm.prank(worker);
+        engine.openEpoch(manualTid, 1, t0Manual, t0Manual + 10, t0Manual + 20);
+
+        uint256 routeAmount = (1000 ether * 9500) / 10_000;
+        vm.expectEmit(true, true, true, true);
+        emit MarketEngineState.YieldRouterDepositFailed(manualTid, routeAmount);
+        engine.depositToSide(manualTid, 1, 0, 1000 ether);
+
+        assertEq(engine.epochs(manualTid, 1).routedPrincipal, 0);
     }
 
     function test_rolling_genesis_reverts_when_interval_too_small() public {

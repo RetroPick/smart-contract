@@ -51,7 +51,7 @@ ROLLING_TEMPLATES=2 python3 scripts/estimate_deploy_and_epoch_costs.py --color a
 ### Combined example (the one you mentioned)
 
 # 50 manual epochs/day, rolling ticks every 30 minutes, 2 rolling templates
-MANUAL_TEMPLATES=100 MANUAL_EPOCHS_PER_DAY=30 ROLLING_INTERVAL_SECONDS=300 ROLLING_TEMPLATES=10 python3 scripts/estimate_deploy_and_epoch_costs.py --color always
+MANUAL_TEMPLATES=15 MANUAL_EPOCHS_PER_DAY=5 ROLLING_INTERVAL_SECONDS=3600 ROLLING_TEMPLATES=2 python3 scripts/estimate_deploy_and_epoch_costs.py --color always
 
 ## Dev-oriented notes
 

@@ -44,6 +44,7 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
     {
         if (globalPaused) revert ProtocolPaused();
         if (!configInitialized) revert Unauthorized();
+        _requireNoUnreconciledRecovery(templateId);
         if (grossAmount == 0) revert ZeroStake();
         if (fromOutcome == toOutcome) revert InvalidOutcome();
         if (fromOutcome >= MarketTypes.MAX_OUTCOMES || toOutcome >= MarketTypes.MAX_OUTCOMES) revert InvalidOutcome();
@@ -129,6 +130,7 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
         uint256 amount
     ) internal {
         if (!configInitialized) revert Unauthorized();
+        _requireNoUnreconciledRecovery(templateId);
         if (amount == 0) revert ZeroStake();
         if (outcomeIndex >= MarketTypes.MAX_OUTCOMES) revert InvalidOutcome();
         MarketTypes.Template storage t = _templates[templateId];
@@ -177,18 +179,22 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
         if (address(r) != address(0)) {
             uint256 routeAmount = (amount * uint256(10_000 - YIELD_BUFFER_BPS)) / 10_000;
             if (routeAmount > 0) {
-                stakeToken.forceApprove(address(r), routeAmount);
-                try r.depositScaled(templateId, routeAmount) returns (uint256 attributionUnits) {
-                    if (attributionUnits > 0) {
-                        _recordRoutedPrincipal(templateId, e, routeAmount);
-                    } else {
+                if (yieldRouterDisabled) {
+                    emit YieldRouterDepositFailed(templateId, routeAmount);
+                } else {
+                    stakeToken.forceApprove(address(r), routeAmount);
+                    try r.depositScaled(templateId, routeAmount) returns (uint256 attributionUnits) {
+                        if (attributionUnits > 0) {
+                            _recordRoutedPrincipal(templateId, e, routeAmount);
+                        } else {
+                            emit YieldRouterDepositFailed(templateId, routeAmount);
+                        }
+                    }
+                    catch {
                         emit YieldRouterDepositFailed(templateId, routeAmount);
                     }
+                    stakeToken.forceApprove(address(r), 0);
                 }
-                catch {
-                    emit YieldRouterDepositFailed(templateId, routeAmount);
-                }
-                stakeToken.forceApprove(address(r), 0);
             }
         }
         emit PositionDeposited(templateId, epochId, beneficiary, outcomeIndex, amount);

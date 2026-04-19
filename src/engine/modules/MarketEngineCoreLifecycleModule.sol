@@ -7,6 +7,7 @@ import {MarketMath} from "../../math/MarketMath.sol";
 import {Resolvers} from "../../logic/Resolvers.sol";
 import {SettlementLogic} from "../../logic/SettlementLogic.sol";
 import {IEventOracle} from "../../interfaces/IEventOracle.sol";
+import {IPriceOracle} from "../../interfaces/IPriceOracle.sol";
 import {IPriceOracleWithRoundId} from "../../interfaces/IPriceOracleWithRoundId.sol";
 import {IYieldRouterV2} from "../../interfaces/IYieldRouterV2.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
@@ -201,6 +202,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         if (!ledger.initialized) revert InvalidTemplate();
         _requireActiveEpoch(ledger, epochId);
         MarketTypes.Epoch storage e = _epochs[templateId][epochId];
+        if (e.routedPrincipal > 0) _requireNoUnreconciledRecovery(templateId);
         if (!(e.status == MarketTypes.EpochStatus.Open || e.status == MarketTypes.EpochStatus.Locked)) {
             revert InvalidEpochState();
         }
@@ -287,6 +289,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         e.compositeFeedCount = t.compositeFeedCount;
         e.compositeLogic = t.compositeLogic;
         e.compositeAbsoluteThresholdsE8 = t.compositeAbsoluteThresholdsE8;
+        _snapshotEpochOracleAdapter(templateId, epochId, t.templateOracleKind, t.oracleClass);
         ledger.activeEpochId = epochId;
         emit EpochOpened(templateId, epochId, openAt, lockAt, resolveAt);
     }
@@ -305,28 +308,41 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
             if (e.templateOracleKind == MarketTypes.OracleKind.TrustedReporter) revert InvalidTemplate();
             uint64 maxDelay = MarketTypes.effectiveOracleMaxDelaySeconds(e, oracleConfig.maxDelaySeconds);
             uint16 maxConf = MarketTypes.effectiveOracleMaxConfidenceBps(e, oracleConfig.maxConfidenceBps);
-            (int256 priceE8, uint64 publishTime, uint256 confidenceE8, uint80 oracleRoundId) =
-                _readOracleOrRevert(templateId, e.oracleClass, e.oracleFeedId, maxDelay, nowTs);
-            _applyLock(templateId, epochId, priceE8, publishTime, confidenceE8, oracleRoundId, maxDelay, maxConf, nowTs);
-            if (e.marketType == MarketTypes.MarketType.Convergence) {
-                (int256 price2, uint64 publish2, uint256 conf2,) =
-                    _readOracleOrRevert(templateId, e.oracleClass, e.oracleFeedIdB, maxDelay, nowTs);
-                _enforceConfidence(price2, conf2, maxConf);
-                e.checkpointA_B = MarketTypes.OracleCheckpoint({
-                    valueE8: price2, publishTime: publish2, confidenceE8: _toConf128(conf2), written: true
-                });
-            } else if (e.marketType == MarketTypes.MarketType.Composite) {
-                for (uint256 i = 0; i < e.compositeFeedCount; i++) {
-                    (int256 pI, uint64 tI, uint256 cI,) =
-                        _readOracleOrRevert(templateId, e.oracleClass, e.compositeFeedIds[i], maxDelay, nowTs);
-                    _enforceConfidence(pI, cI, maxConf);
-                    e.compositeCheckpointsA[i] = MarketTypes.OracleCheckpoint({
-                        valueE8: pI, publishTime: tI, confidenceE8: _toConf128(cI), written: true
-                    });
-                }
-            }
+            IPriceOracle epochOracle = _resolveEpochOracle(templateId, epochId, e.oracleClass);
+            _applyLockWithOracleReads(templateId, epochId, e, epochOracle, maxDelay, maxConf, nowTs);
         } else {
             _applyLock(templateId, epochId, 0, 0, 0, 0, 0, 0, nowTs);
+        }
+    }
+
+    function _applyLockWithOracleReads(
+        bytes32 templateId,
+        uint64 epochId,
+        MarketTypes.Epoch storage e,
+        IPriceOracle epochOracle,
+        uint64 maxDelay,
+        uint16 maxConf,
+        uint64 nowTs
+    ) internal {
+        (int256 priceE8, uint64 publishTime, uint256 confidenceE8, uint80 oracleRoundId) =
+            _readOracleOrRevert(templateId, epochOracle, e.oracleFeedId, maxDelay, nowTs);
+        _applyLock(templateId, epochId, priceE8, publishTime, confidenceE8, oracleRoundId, maxDelay, maxConf, nowTs);
+        if (e.marketType == MarketTypes.MarketType.Convergence) {
+            (int256 price2, uint64 publish2, uint256 conf2,) =
+                _readOracleOrRevert(templateId, epochOracle, e.oracleFeedIdB, maxDelay, nowTs);
+            _enforceConfidence(price2, conf2, maxConf);
+            e.checkpointA_B = MarketTypes.OracleCheckpoint({
+                valueE8: price2, publishTime: publish2, confidenceE8: _toConf128(conf2), written: true
+            });
+        } else if (e.marketType == MarketTypes.MarketType.Composite) {
+            for (uint256 i = 0; i < e.compositeFeedCount; i++) {
+                (int256 pI, uint64 tI, uint256 cI,) =
+                    _readOracleOrRevert(templateId, epochOracle, e.compositeFeedIds[i], maxDelay, nowTs);
+                _enforceConfidence(pI, cI, maxConf);
+                e.compositeCheckpointsA[i] = MarketTypes.OracleCheckpoint({
+                    valueE8: pI, publishTime: tI, confidenceE8: _toConf128(cI), written: true
+                });
+            }
         }
     }
 
@@ -352,12 +368,13 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
             }
         } else {
             {
+                IPriceOracle epochOracle = _resolveEpochOracle(templateId, epochId, e.oracleClass);
                 (rd.priceE8, rd.publishTime, rd.confidenceE8, rd.oracleRoundId) =
-                    _readOracleOrRevert(templateId, e.oracleClass, e.oracleFeedId, maxDelay, nowTs);
+                    _readOracleOrRevert(templateId, epochOracle, e.oracleFeedId, maxDelay, nowTs);
                 if (e.marketType == MarketTypes.MarketType.Convergence) {
-                    _resolveConvergenceCheckpointB(templateId, e, maxDelay, maxConf, nowTs);
+                    _resolveConvergenceCheckpointB(templateId, epochOracle, e, maxDelay, maxConf, nowTs);
                 } else if (e.marketType == MarketTypes.MarketType.Composite) {
-                    _resolveCompositeCheckpointB(templateId, e, maxDelay, maxConf, nowTs);
+                    _resolveCompositeCheckpointB(templateId, epochOracle, e, maxDelay, maxConf, nowTs);
                 }
             }
         }
@@ -389,12 +406,14 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
 
     function _resolveConvergenceCheckpointB(
         bytes32 templateId,
+        IPriceOracle epochOracle,
         MarketTypes.Epoch storage e,
         uint64 maxDelay,
         uint16 maxConf,
         uint64 nowTs
     ) internal {
-        (int256 p2, uint64 t2, uint256 c2,) = _readOracleOrRevert(templateId, e.oracleClass, e.oracleFeedIdB, maxDelay, nowTs);
+        (int256 p2, uint64 t2, uint256 c2,) =
+            _readOracleOrRevert(templateId, epochOracle, e.oracleFeedIdB, maxDelay, nowTs);
         _enforceConfidence(p2, c2, maxConf);
         e.checkpointB_B =
             MarketTypes.OracleCheckpoint({valueE8: p2, publishTime: t2, confidenceE8: _toConf128(c2), written: true});
@@ -402,6 +421,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
 
     function _resolveCompositeCheckpointB(
         bytes32 templateId,
+        IPriceOracle epochOracle,
         MarketTypes.Epoch storage e,
         uint64 maxDelay,
         uint16 maxConf,
@@ -409,7 +429,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
     ) internal {
         for (uint256 i = 0; i < e.compositeFeedCount; i++) {
             (int256 pI, uint64 tI, uint256 cI,) =
-                _readOracleOrRevert(templateId, e.oracleClass, e.compositeFeedIds[i], maxDelay, nowTs);
+                _readOracleOrRevert(templateId, epochOracle, e.compositeFeedIds[i], maxDelay, nowTs);
             _enforceConfidence(pI, cI, maxConf);
             e.compositeCheckpointsB[i] =
                 MarketTypes.OracleCheckpoint({valueE8: pI, publishTime: tI, confidenceE8: _toConf128(cI), written: true});
@@ -503,11 +523,13 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         returns (uint256 grossYield)
     {
         IYieldRouterV2 r = yieldRouter;
-        if (address(r) == address(0) || yieldRouterDisabled) return 0;
+        if (address(r) == address(0)) return 0;
 
         MarketTypes.Epoch storage e = _epochs[templateId][epochId];
         uint256 routedPrincipal = e.routedPrincipal;
         if (routedPrincipal < 1) return 0;
+        if (yieldRouterDisabled) revert YieldRouterDisabledState();
+        _requireNoUnreconciledRecovery(templateId);
 
         uint256 received = _balanceDeltaAfterWithdrawScaled(r, templateId, routedPrincipal);
         e.routedPrincipal = 0;
@@ -634,7 +656,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
 
     function _readOracleOrRevert(
         bytes32 templateId,
-        MarketTypes.OracleClass oracleClass,
+        IPriceOracle oracleBase,
         bytes32 feedId,
         uint64 maxDelay,
         uint64 nowTs
@@ -642,7 +664,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         internal
         returns (int256 priceE8, uint64 publishTime, uint256 confidenceE8, uint80 oracleRoundId)
     {
-        IPriceOracleWithRoundId oracle = IPriceOracleWithRoundId(address(_resolveOracleByClass(oracleClass)));
+        IPriceOracleWithRoundId oracle = IPriceOracleWithRoundId(address(oracleBase));
         try oracle
             .getNormalizedPriceWithRoundId(feedId, maxDelay, nowTs) returns (
             uint80 rid, int256 p, uint64 pt, uint256 c
@@ -650,8 +672,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
             _enforceAndUpdateOracleCursor(templateId, feedId, rid, pt, true);
             return (p, pt, c, rid);
         } catch {
-            (priceE8, publishTime, confidenceE8) =
-                _resolveOracleByClass(oracleClass).getNormalizedPrice(feedId, maxDelay, nowTs);
+            (priceE8, publishTime, confidenceE8) = oracleBase.getNormalizedPrice(feedId, maxDelay, nowTs);
             _enforceAndUpdateOracleCursor(templateId, feedId, 0, publishTime, false);
             return (priceE8, publishTime, confidenceE8, 0);
         }

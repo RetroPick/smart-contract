@@ -40,6 +40,30 @@ Bottom line:
 - suitable for continued internal validation and guarded staging
 - not yet sufficient for serious public TVL under a strict production-grade standard
 
+## Recent Hardening Already Implemented
+
+The following are no longer just checklist items. They were confirmed as live code issues during the attacker-mode review, reproduced with tests, and then fixed in the engine:
+
+- manual cancel and manual resolve no longer proceed if routed principal cannot be fully recovered from the yield router
+- rolling cancel while halted now also requires full principal recovery instead of silently continuing with underfunded claims
+- yield-router replacement is blocked while any routed principal remains outstanding
+- epoch routed-principal reconciliation now requires actual recovered funds, not blind admin bookkeeping
+- emergency withdraw accounting now uses engine token balance delta instead of trusting router self-reported return values
+- emergency router recovery and routed-principal reconciliation are now pause-gated, preventing live-mode operator misuse against healthy markets
+- templates with pending unreconciled emergency recovery now block new user ops and rolling round execution, preventing mixed old-recovery/new-routing states across same-template epochs
+- once the yield router enters disabled state after repeated failures, new deposits no longer route fresh principal into it
+- reset of yield-router failure/disabled state is now pause-gated, preventing live re-enablement of a previously unhealthy router
+- manual resolve and rolling recovery flows no longer settle through a globally disabled router while routed principal is still outstanding
+- protocol unpause is now blocked while disabled-router or unreconciled-recovery state still exists, preventing unsafe resume into known-bad routing conditions
+- excess yield recovered during emergency unwind is now booked into fee reserves instead of remaining as unaccounted engine balance
+- rolling lifecycle reset now refuses to proceed while the halted active epoch is still unresolved or uncanceled, preventing orphaned user funds
+- oracle cursor reset is now blocked while a template still has an active open or locked epoch, preventing live settlement continuity from being cleared mid-lifecycle
+- each epoch now snapshots the concrete oracle adapter address at open, so later admin adapter changes affect only future epochs rather than already-open positions
+- replacing a configured oracle adapter address still requires the protocol to be paused, keeping live source migrations in an explicit operator-controlled maintenance window
+- trusted-reporter clear operations now emit events, improving settlement-correction observability
+
+These fixes materially improve production posture, but they do not replace the need for invariant coverage, governance hardening, or operational runbooks.
+
 ## Production-Grade Standard
 
 For this protocol, "production-grade" should mean all of the following are true:
@@ -82,6 +106,10 @@ Two oracle models exist:
 - trusted-reporter signed payload adapter
 
 The trusted-reporter model is intentionally centralized in [src/oracle/TrustedReporterAdapter.sol](/home/asyam/dev/Project/RetroPick/V1/contract/src/oracle/TrustedReporterAdapter.sol:13). That is acceptable only if the centralization is explicitly acknowledged and operationally hardened.
+
+Recent code hardening also closed an operator sequencing gap in the Chainlink-family path: [resetOracleCursor(bytes32,bytes32)](/home/asyam/dev/Project/RetroPick/V1/contract/src/engine/modules/MarketEngineAdminModule.sol:101) can still be used for clean between-epoch adapter migrations, but it can no longer be used while a template has a live open or locked epoch. Without that restriction, an admin could clear the template-scoped monotonic oracle cursor during an active market and then settle against a lower continuity point than the engine had already observed.
+
+A second settlement-integrity gap also existed in the same trust surface: epochs snapshot `oracleClass`, but they originally did not snapshot the concrete adapter address behind that class. Before hardening, an admin could replace a configured adapter such as `rateOracle` or `macroOracle` during a live epoch and change the settlement source without changing the epoch’s snapshotted class. The engine now snapshots the concrete adapter address per epoch at open and resolves later reads against that snapshot, so adapter swaps only affect future epochs. The pause requirement on adapter replacement remains as an extra operational guardrail. In rolling mode, if `prev` and `cur` epochs were opened under different adapter snapshots but the round execution path would otherwise try to reuse a single oracle sample across both, the engine now halts the round instead of mixing sources.
 
 Production-grade implication:
 
@@ -266,7 +294,7 @@ Evidence sources:
 
 Status:
 
-- missing as a meaningful harness today
+- partial harness exists, but not yet broad enough for serious-TVL confidence
 
 Required artifact:
 
@@ -298,6 +326,11 @@ Required adversarial actions in harness:
 - router short return
 - router repeated failure until disablement
 - rolling halt then admin recovery
+- emergency withdraw with:
+  - principal-only return
+  - principal plus yield return
+  - lying router return values
+  - multi-epoch same-template recovery
 
 Go/No-Go:
 
@@ -440,12 +473,19 @@ Must define:
 - when `resetYieldRouterFailures` is allowed
 - when `yieldEmergencyWithdraw` is used
 - who verifies recovered balance before re-enabling normal operations
+- how recovered principal is reconciled epoch-by-epoch
+- how excess recovered yield is verified and booked
+- explicit rule that router replacement is forbidden until outstanding routed principal is zero
 
 References:
 
 - [src/engine/modules/MarketEngineAdminModule.sol](/home/asyam/dev/Project/RetroPick/V1/contract/src/engine/modules/MarketEngineAdminModule.sol:121)
 - [src/engine/modules/MarketEngineCoreLifecycleModule.sol](/home/asyam/dev/Project/RetroPick/V1/contract/src/engine/modules/MarketEngineCoreLifecycleModule.sol:512)
 - [src/engine/modules/MarketEngineRollingLifecycleModule.sol](/home/asyam/dev/Project/RetroPick/V1/contract/src/engine/modules/MarketEngineRollingLifecycleModule.sol:530)
+
+Additional operational note:
+
+- the current code is intentionally stricter now: recovery bookkeeping follows actual engine token balance changes, not router return values or operator assertions
 
 ### D3. Treasury control
 
@@ -480,6 +520,7 @@ Must include:
 Status:
 
 - code supports halt, cancel while halted, and reset
+- code now also prevents lifecycle reset while the halted active epoch is still unresolved or uncanceled
 - runbook mentions recovery flow
 
 Required artifact:
@@ -496,6 +537,10 @@ Must define exact sequence:
 6. reset lifecycle cursor
 7. run smoke check
 8. resume
+
+Critical rule:
+
+- do not call `resetRollingLifecycle` until every halted unresolved epoch that can trap funds has been explicitly canceled or otherwise cleared
 
 References:
 
@@ -567,6 +612,9 @@ At minimum monitor:
 - `YieldRouterFailureRecorded`
 - `YieldRouterDisabled`
 - `YieldRouterWithdrawFailed`
+- `YieldEmergencyWithdrawn`
+- `EpochRoutedPrincipalReconciled`
+- `EmergencyRecoveredYieldBooked`
 - `OracleCursorReset`
 - unusually high claim failure rate
 - unresolved epoch backlog
@@ -667,6 +715,7 @@ If any of the following are true, the protocol is not production-grade:
 - no written incident response exists
 - no clear policy exists for trusted-reporter correction or rotation
 - no tested recovery path exists for rolling halts or router disablement
+- emergency recovery accounting policy for recovered principal versus recovered yield is undocumented or operationally ambiguous
 
 ## Priority Order
 
@@ -690,3 +739,10 @@ The codebase is no longer at the "unknown unknowns everywhere" stage. It has cro
 - how operations recover under stress
 
 That is exactly where a serious protocol should be before public launch. The missing work is not cosmetic. It is the final layer that turns solid code into a production system.
+
+One important refinement after the recent audit pass:
+
+- several of the most dangerous serious-TVL issues were not classical permissionless exploits, but operator-sequencing failures at trust boundaries
+- for this protocol design, production-grade means not only “an attacker cannot steal funds,” but also “trusted operators cannot accidentally create unrecoverable accounting states during pause, recovery, router migration, or rolling reset”
+
+That distinction should shape launch review and external audit scope.

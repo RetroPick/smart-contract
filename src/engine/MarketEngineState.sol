@@ -50,6 +50,7 @@ abstract contract MarketEngineState {
     mapping(bytes32 templateId => MarketTypes.Ledger) internal _ledgers;
     mapping(bytes32 templateId => MarketTypes.VaultBalances) internal _vaults;
     mapping(bytes32 templateId => mapping(uint64 epochId => MarketTypes.Epoch)) internal _epochs;
+    mapping(bytes32 templateId => mapping(uint64 epochId => address oracleAdapter)) internal _epochOracleAdapters;
     mapping(bytes32 positionKey => mapping(address user => MarketTypes.Position)) internal _positions;
     mapping(address account => bool) public isDepositExecutor;
     mapping(bytes32 templateId => mapping(address user => uint64[] epochIds)) internal _userEpochs;
@@ -70,6 +71,7 @@ abstract contract MarketEngineState {
     bool public yieldRouterDisabled;
     uint8 public yieldRouterFailureCount;
     uint256 public totalRoutedPrincipal;
+    uint256 public totalUnreconciledRecovered;
     uint8 internal constant MAX_YIELD_ROUTER_FAILURES = 3;
     uint16 internal constant YIELD_BUFFER_BPS = 500;
 
@@ -77,7 +79,7 @@ abstract contract MarketEngineState {
     mapping(bytes4 selector => address module) internal selectorToModule;
     mapping(bytes4 selector => bool immutableSelector) internal selectorImmutable;
 
-    uint256[40] private __gap;
+    uint256[39] private __gap;
 
     error Unauthorized();
     error InvalidAuthority();
@@ -140,8 +142,13 @@ abstract contract MarketEngineState {
     error NotInitialized();
     error VaultInsufficientActive(bytes32 templateId, uint256 active, uint256 required);
     error YieldRouterShortfall(uint256 expectedPrincipal, uint256 recoveredPrincipal);
+    error YieldRouterDisabledState();
     error OutstandingRoutedPrincipal(uint256 outstandingPrincipal);
     error UnreconciledRecoveryInsufficient(bytes32 templateId, uint256 availableAmount, uint256 requestedAmount);
+    error UnreconciledRecoveryPending(bytes32 templateId, uint256 pendingAmount);
+    error UnsafeToUnpause(bool yieldRouterDisabled, uint256 pendingRecoveredAmount);
+    error OracleCursorResetWhileEpochActive(bytes32 templateId, uint64 epochId, uint8 status);
+    error OracleAdapterChangeRequiresPause(address oldOracle, address newOracle);
 
     event ConfigInitialized(address admin, address treasury, address workerAuthority);
     event TemplateUpserted(
@@ -302,6 +309,26 @@ abstract contract MarketEngineState {
         return _resolveOracleByClass(_templates[templateId].oracleClass);
     }
 
+    function _snapshotEpochOracleAdapter(
+        bytes32 templateId,
+        uint64 epochId,
+        MarketTypes.OracleKind oracleKind,
+        MarketTypes.OracleClass oracleClass
+    ) internal {
+        if (oracleKind == MarketTypes.OracleKind.TrustedReporter) return;
+        _epochOracleAdapters[templateId][epochId] = address(_resolveOracleByClass(oracleClass));
+    }
+
+    function _resolveEpochOracle(bytes32 templateId, uint64 epochId, MarketTypes.OracleClass oracleClass)
+        internal
+        view
+        returns (IPriceOracle)
+    {
+        address oracleAdapter = _epochOracleAdapters[templateId][epochId];
+        if (oracleAdapter != address(0)) return IPriceOracle(oracleAdapter);
+        return _resolveOracleByClass(oracleClass);
+    }
+
     function _applyResolveAccounting(
         bytes32 templateId,
         uint64 epochId,
@@ -381,6 +408,11 @@ abstract contract MarketEngineState {
             received = b1 - b0;
         }
         if (received < principalAmount) revert YieldRouterShortfall(principalAmount, received);
+    }
+
+    function _requireNoUnreconciledRecovery(bytes32 templateId) internal view {
+        uint256 pendingAmount = _unreconciledRecoveredByTemplate[templateId];
+        if (pendingAmount != 0) revert UnreconciledRecoveryPending(templateId, pendingAmount);
     }
 }
 // slither-disable-end uninitialized-state

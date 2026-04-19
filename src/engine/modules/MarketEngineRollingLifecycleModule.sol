@@ -5,6 +5,7 @@ import {MarketEngineState} from "../MarketEngineState.sol";
 import {MarketTypes} from "../../types/MarketTypes.sol";
 import {MarketMath} from "../../math/MarketMath.sol";
 import {SettlementLogic} from "../../logic/SettlementLogic.sol";
+import {IPriceOracle} from "../../interfaces/IPriceOracle.sol";
 import {IPriceOracleWithRoundId} from "../../interfaces/IPriceOracleWithRoundId.sol";
 import {IYieldRouterV2} from "../../interfaces/IYieldRouterV2.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
@@ -60,8 +61,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         }
 
         if (MarketTypes.requiresCheckpointAOnLock(e1)) {
-            bool lockApplied =
-                _applyGenesisLockWithOracle(templateId, k, e1, e1.oracleClass, e1.oracleFeedId, nowTs);
+            bool lockApplied = _applyGenesisLockWithOracle(templateId, k, e1, e1.oracleFeedId, nowTs);
             if (!lockApplied) {
                 return;
             }
@@ -113,7 +113,10 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         if (ledger.rollingPhase != MarketTypes.RollingPhase.Halted) revert RollingWrongPhase();
         uint64 hi = ledger.lastResolvedEpochId;
         if (ledger.activeEpochId > hi) hi = ledger.activeEpochId;
-        if (ledger.activeEpochId != 0 && ledger.activeEpochId != ledger.lastResolvedEpochId) revert InvalidRollingRecovery();
+        if (!_isRollingEpochCleared(templateId, ledger.activeEpochId)) revert InvalidRollingRecovery();
+        if (ledger.activeEpochId > 1 && !_isRollingEpochCleared(templateId, ledger.activeEpochId - 1)) {
+            revert InvalidRollingRecovery();
+        }
         if (nextRollingEpochId == 0 || nextRollingEpochId <= hi) revert InvalidRollingRecovery();
 
         ledger.rollingPhase = MarketTypes.RollingPhase.Uninitialized;
@@ -141,6 +144,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
 
         MarketTypes.Epoch storage e = _epochs[templateId][epochId];
         if (!e.exists) revert InvalidEpochState();
+        if (e.routedPrincipal > 0) _requireNoUnreconciledRecovery(templateId);
         if (!(e.status == MarketTypes.EpochStatus.Open || e.status == MarketTypes.EpochStatus.Locked)) {
             revert InvalidEpochState();
         }
@@ -179,6 +183,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         MarketTypes.Ledger storage ledger = _ledgers[templateId];
         if (!ledger.initialized) revert InvalidTemplate();
         if (ledger.rollingPhase != MarketTypes.RollingPhase.Live) revert RollingWrongPhase();
+        _requireNoUnreconciledRecovery(templateId);
 
         uint64 k = ledger.activeEpochId;
         if (k < 2) revert InvalidEpochState();
@@ -277,6 +282,8 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         e.compositeConditions = t.compositeConditions;
         e.compositeFeedCount = t.compositeFeedCount;
         e.compositeLogic = t.compositeLogic;
+        e.compositeAbsoluteThresholdsE8 = t.compositeAbsoluteThresholdsE8;
+        _snapshotEpochOracleAdapter(templateId, epochId, t.templateOracleKind, t.oracleClass);
 
         ledger.activeEpochId = epochId;
         ledger.rollingNextEpochId = epochId + 1;
@@ -288,13 +295,14 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         bytes32 templateId,
         uint64 epochId,
         MarketTypes.Epoch storage e,
-        MarketTypes.OracleClass oracleClass,
         bytes32 oracleFeedId,
         uint64 nowTs
     ) internal returns (bool) {
         uint64 maxDelay = MarketTypes.effectiveOracleMaxDelaySeconds(e, oracleConfig.maxDelaySeconds);
         uint16 maxConf = MarketTypes.effectiveOracleMaxConfidenceBps(e, oracleConfig.maxConfidenceBps);
-        (bool ok, OracleSample memory sample) = _tryReadOracleSample(templateId, oracleClass, oracleFeedId, maxDelay, nowTs);
+        IPriceOracle epochOracle = _resolveEpochOracle(templateId, epochId, e.oracleClass);
+        (bool ok, OracleSample memory sample) =
+            _tryReadOracleSample(templateId, epochOracle, oracleFeedId, maxDelay, nowTs);
         if (!ok) {
             _haltRollingOracleFailure(templateId, epochId);
             return false;
@@ -348,14 +356,19 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         MarketTypes.Epoch storage ePrev = _epochs[templateId][prevEpochId];
         MarketTypes.Epoch storage eCur = _epochs[templateId][lockEpochId];
         bool needsCheckpointA = MarketTypes.requiresCheckpointAOnLock(eCur);
+        IPriceOracle prevOracle = _resolveEpochOracle(templateId, prevEpochId, ePrev.oracleClass);
 
         (bool ok, OracleSample memory sample) =
-            _tryReadOracleSample(templateId, ePrev.oracleClass, ePrev.oracleFeedId, maxDelay, nowTs);
+            _tryReadOracleSample(templateId, prevOracle, ePrev.oracleFeedId, maxDelay, nowTs);
         if (!ok) {
             _haltRollingOracleFailure(templateId, lockEpochId);
             return false;
         }
         if (needsCheckpointA && (eCur.oracleClass != ePrev.oracleClass || eCur.oracleFeedId != ePrev.oracleFeedId)) {
+            _haltRollingOracleFailure(templateId, lockEpochId);
+            return false;
+        }
+        if (needsCheckpointA && address(_resolveEpochOracle(templateId, lockEpochId, eCur.oracleClass)) != address(prevOracle)) {
             _haltRollingOracleFailure(templateId, lockEpochId);
             return false;
         }
@@ -473,11 +486,21 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         returns (uint256 grossYield)
     {
         IYieldRouterV2 r = yieldRouter;
-        if (address(r) == address(0) || yieldRouterDisabled) return 0;
+        if (address(r) == address(0)) return 0;
 
         MarketTypes.Epoch storage e = _epochs[templateId][epochId];
         uint256 routedPrincipal = e.routedPrincipal;
         if (routedPrincipal < 1) return 0;
+        if (yieldRouterDisabled) {
+            emit YieldRouterWithdrawFailed(templateId, epochId, routedPrincipal);
+            if (rollingLink) {
+                _haltRolling(
+                    templateId, _ledgers[templateId], MarketTypes.RollingHaltReason.OracleFailure, _ledgers[templateId].activeEpochId
+                );
+                return 0;
+            }
+            revert YieldRouterDisabledState();
+        }
 
         uint256 b0 = stakeToken.balanceOf(address(this));
         try r.withdrawScaled(templateId, routedPrincipal) returns (uint256) {
@@ -521,7 +544,8 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         MarketTypes.Ledger storage ledger
     ) private {
         IYieldRouterV2 r = yieldRouter;
-        if (address(r) == address(0) || yieldRouterDisabled || e.routedPrincipal == 0) return;
+        if (address(r) == address(0) || e.routedPrincipal == 0) return;
+        if (yieldRouterDisabled) revert YieldRouterDisabledState();
         uint256 rp = e.routedPrincipal;
         uint256 gained = _balanceDeltaAfterWithdrawScaled(r, templateId, rp);
         e.routedPrincipal = 0;
@@ -632,6 +656,12 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         emit RollingHalted(templateId, uint8(reason), atEpoch);
     }
 
+    function _isRollingEpochCleared(bytes32 templateId, uint64 epochId) internal view returns (bool) {
+        if (epochId == 0) return true;
+        MarketTypes.EpochStatus status = _epochs[templateId][epochId].status;
+        return status != MarketTypes.EpochStatus.Open && status != MarketTypes.EpochStatus.Locked;
+    }
+
     function _requireActiveEpoch(MarketTypes.Ledger storage ledger, uint64 epochId) internal view {
         if (epochId != ledger.activeEpochId) revert EpochNotActive();
     }
@@ -658,7 +688,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
 
     function _tryReadOracle(
         bytes32 templateId,
-        MarketTypes.OracleClass oracleClass,
+        IPriceOracle oracleBase,
         bytes32 feedId,
         uint64 maxDelay,
         uint64 nowTs
@@ -666,7 +696,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         internal
         returns (bool ok, int256 priceE8, uint64 publishTime, uint256 confidenceE8, uint80 oracleRoundId)
     {
-        IPriceOracleWithRoundId oracle = IPriceOracleWithRoundId(address(_resolveOracleByClass(oracleClass)));
+        IPriceOracleWithRoundId oracle = IPriceOracleWithRoundId(address(oracleBase));
         try oracle
             .getNormalizedPriceWithRoundId(feedId, maxDelay, nowTs) returns (
             uint80 rid, int256 p, uint64 pt, uint256 c
@@ -674,7 +704,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
             _enforceAndUpdateOracleCursor(templateId, feedId, rid, pt, true);
             return (true, p, pt, c, rid);
         } catch {
-            try _resolveOracleByClass(oracleClass).getNormalizedPrice(feedId, maxDelay, nowTs) returns (
+            try oracleBase.getNormalizedPrice(feedId, maxDelay, nowTs) returns (
                 int256 p2,
                 uint64 pt2,
                 uint256 c2
@@ -689,13 +719,13 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
 
     function _tryReadOracleSample(
         bytes32 templateId,
-        MarketTypes.OracleClass oracleClass,
+        IPriceOracle oracleBase,
         bytes32 feedId,
         uint64 maxDelay,
         uint64 nowTs
     ) internal returns (bool ok, OracleSample memory sample) {
         (ok, sample.priceE8, sample.publishTime, sample.confidenceE8, sample.oracleRoundId) =
-            _tryReadOracle(templateId, oracleClass, feedId, maxDelay, nowTs);
+            _tryReadOracle(templateId, oracleBase, feedId, maxDelay, nowTs);
     }
 
     function _enforceAndUpdateOracleCursor(

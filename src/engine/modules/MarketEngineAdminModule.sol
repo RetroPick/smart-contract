@@ -16,6 +16,9 @@ contract MarketEngineAdminModule is MarketEngineState {
 
     function pauseProgram(bool paused) external {
         _authAdmin();
+        if (!paused && (yieldRouterDisabled || totalUnreconciledRecovered != 0)) {
+            revert UnsafeToUnpause(yieldRouterDisabled, totalUnreconciledRecovered);
+        }
         globalPaused = paused;
     }
 
@@ -50,19 +53,24 @@ contract MarketEngineAdminModule is MarketEngineState {
         }
         yieldRouter = IYieldRouterV2(router);
         yieldFeeBps = router == address(0) ? 0 : feeBps;
-        yieldRouterFailureCount = 0;
-        yieldRouterDisabled = false;
+        if (old != router) {
+            yieldRouterFailureCount = 0;
+            yieldRouterDisabled = false;
+        }
         if (router == address(0)) {
             lmRewardsEnabled = false;
         }
         emit YieldRouterSet(old, router, yieldFeeBps);
-        emit YieldRouterFailureStateReset();
+        if (old != router) {
+            emit YieldRouterFailureStateReset();
+        }
     }
 
     function setRateOracle(address oracle) external {
         _authAdmin();
         if (oracle == address(0)) revert InvalidOracleFeed();
         address old = address(rateOracle);
+        _requirePausedForOracleAdapterReplacement(old, oracle);
         rateOracle = IPriceOracle(oracle);
         emit RateOracleSet(old, oracle);
     }
@@ -71,6 +79,7 @@ contract MarketEngineAdminModule is MarketEngineState {
         _authAdmin();
         if (oracle == address(0)) revert InvalidOracleFeed();
         address old = address(smartDataOracle);
+        _requirePausedForOracleAdapterReplacement(old, oracle);
         smartDataOracle = IPriceOracle(oracle);
         emit SmartDataOracleSet(old, oracle);
     }
@@ -79,6 +88,7 @@ contract MarketEngineAdminModule is MarketEngineState {
         _authAdmin();
         if (oracle == address(0)) revert InvalidOracleFeed();
         address old = address(macroOracle);
+        _requirePausedForOracleAdapterReplacement(old, oracle);
         macroOracle = IPriceOracle(oracle);
         emit MacroOracleSet(old, oracle);
     }
@@ -87,6 +97,7 @@ contract MarketEngineAdminModule is MarketEngineState {
         _authAdmin();
         if (oracle == address(0)) revert InvalidOracleFeed();
         address old = address(equityOracle);
+        _requirePausedForOracleAdapterReplacement(old, oracle);
         equityOracle = IPriceOracle(oracle);
         emit EquityOracleSet(old, oracle);
     }
@@ -95,6 +106,14 @@ contract MarketEngineAdminModule is MarketEngineState {
         _authAdmin();
         if (_templates[templateId].version == 0) revert InvalidTemplate();
         if (feedId == bytes32(0)) revert InvalidOracleFeed();
+        MarketTypes.Ledger storage ledger = _ledgers[templateId];
+        uint64 activeEpochId = ledger.activeEpochId;
+        if (activeEpochId != 0) {
+            MarketTypes.EpochStatus status = _epochs[templateId][activeEpochId].status;
+            if (status == MarketTypes.EpochStatus.Open || status == MarketTypes.EpochStatus.Locked) {
+                revert OracleCursorResetWhileEpochActive(templateId, activeEpochId, uint8(status));
+            }
+        }
         delete lastOracleCursorByTemplateFeed[templateId][feedId];
         delete oracleCursorUsesRoundId[templateId][feedId];
         emit OracleCursorReset(templateId, feedId);
@@ -123,6 +142,7 @@ contract MarketEngineAdminModule is MarketEngineState {
 
     function yieldEmergencyWithdraw(bytes32 templateId) external {
         _authAdmin();
+        if (!globalPaused) revert ProtocolPaused();
         IYieldRouterV2 r = yieldRouter;
         if (address(r) == address(0)) revert Unauthorized();
         uint256 balBefore = stakeToken.balanceOf(address(this));
@@ -135,12 +155,14 @@ contract MarketEngineAdminModule is MarketEngineState {
         }
         if (grossAmount > 0) {
             _unreconciledRecoveredByTemplate[templateId] += grossAmount;
+            totalUnreconciledRecovered += grossAmount;
         }
         emit YieldEmergencyWithdrawn(templateId, grossAmount);
     }
 
     function reconcileEpochRoutedPrincipal(bytes32 templateId, uint64 epochId, uint256 recoveredPrincipal) external {
         _authAdmin();
+        if (!globalPaused) revert ProtocolPaused();
         if (recoveredPrincipal == 0) revert NothingToClaim();
         MarketTypes.Epoch storage e = _epochs[templateId][epochId];
         if (!e.exists) revert InvalidEpochState();
@@ -154,11 +176,13 @@ contract MarketEngineAdminModule is MarketEngineState {
             totalRoutedPrincipal -= recoveredPrincipal;
             _templateRoutedPrincipal[templateId] -= recoveredPrincipal;
             _unreconciledRecoveredByTemplate[templateId] = availableRecovered - recoveredPrincipal;
+            totalUnreconciledRecovered -= recoveredPrincipal;
         }
         if (_templateRoutedPrincipal[templateId] == 0) {
             uint256 excessRecovered = _unreconciledRecoveredByTemplate[templateId];
             if (excessRecovered > 0) {
                 _unreconciledRecoveredByTemplate[templateId] = 0;
+                totalUnreconciledRecovered -= excessRecovered;
                 _vaults[templateId].fees += excessRecovered;
                 _ledgers[templateId].feeReserveTotal += excessRecovered;
                 emit EmergencyRecoveredYieldBooked(templateId, excessRecovered);
@@ -169,6 +193,7 @@ contract MarketEngineAdminModule is MarketEngineState {
 
     function resetYieldRouterFailures() external {
         _authAdmin();
+        if (!globalPaused) revert ProtocolPaused();
         yieldRouterFailureCount = 0;
         yieldRouterDisabled = false;
         emit YieldRouterFailureStateReset();
@@ -201,5 +226,11 @@ contract MarketEngineAdminModule is MarketEngineState {
         _vaults[templateId].fees -= amount;
         stakeToken.safeTransfer(treasury, amount);
         emit FeesWithdrawn(templateId, amount);
+    }
+
+    function _requirePausedForOracleAdapterReplacement(address oldOracle, address newOracle) internal view {
+        if (oldOracle != address(0) && oldOracle != newOracle && !globalPaused) {
+            revert OracleAdapterChangeRequiresPause(oldOracle, newOracle);
+        }
     }
 }
