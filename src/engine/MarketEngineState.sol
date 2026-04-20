@@ -51,6 +51,7 @@ abstract contract MarketEngineState {
     mapping(bytes32 templateId => MarketTypes.VaultBalances) internal _vaults;
     mapping(bytes32 templateId => mapping(uint64 epochId => MarketTypes.Epoch)) internal _epochs;
     mapping(bytes32 templateId => mapping(uint64 epochId => address oracleAdapter)) internal _epochOracleAdapters;
+    mapping(bytes32 templateId => mapping(uint64 epochId => uint16 yieldFeeBpsSnapshot)) internal _epochYieldFeeBps;
     mapping(bytes32 positionKey => mapping(address user => MarketTypes.Position)) internal _positions;
     mapping(address account => bool) public isDepositExecutor;
     mapping(bytes32 templateId => mapping(address user => uint64[] epochIds)) internal _userEpochs;
@@ -79,7 +80,7 @@ abstract contract MarketEngineState {
     mapping(bytes4 selector => address module) internal selectorToModule;
     mapping(bytes4 selector => bool immutableSelector) internal selectorImmutable;
 
-    uint256[39] private __gap;
+    uint256[38] private __gap;
 
     error Unauthorized();
     error InvalidAuthority();
@@ -231,6 +232,9 @@ abstract contract MarketEngineState {
         bytes32 indexed templateId, uint64 indexed epochId, uint256 recoveredPrincipal, uint256 remainingPrincipal
     );
     event EmergencyRecoveredYieldBooked(bytes32 indexed templateId, uint256 amount);
+    event EmergencyRecoveredBalanceReassigned(
+        bytes32 indexed fromTemplateId, bytes32 indexed toTemplateId, uint256 amount
+    );
     event ModuleRegistered(address indexed module, bytes32 indexed codeHash);
     event ModuleCodeHashAllowed(bytes32 indexed codeHash);
     event ModuleCodeHashDisallowed(bytes32 indexed codeHash);

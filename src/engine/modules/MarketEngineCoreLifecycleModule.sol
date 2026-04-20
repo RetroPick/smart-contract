@@ -290,6 +290,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         e.compositeLogic = t.compositeLogic;
         e.compositeAbsoluteThresholdsE8 = t.compositeAbsoluteThresholdsE8;
         _snapshotEpochOracleAdapter(templateId, epochId, t.templateOracleKind, t.oracleClass);
+        _epochYieldFeeBps[templateId][epochId] = yieldFeeBps;
         ledger.activeEpochId = epochId;
         emit EpochOpened(templateId, epochId, openAt, lockAt, resolveAt);
     }
@@ -394,7 +395,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
             return publishTime;
         }
 
-        (int256 highE8, int256 lowE8, int256 _openE8, uint64 observedAt, bool written) =
+        (int256 highE8, int256 lowE8,, uint64 observedAt, bool written) =
             IEventOracle(e.eventOracle).getOhlcResult(positionKey(templateId, epochId));
         if (!written) revert InvalidOracleFeed();
 
@@ -459,7 +460,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         });
 
         uint256 grossYield = _withdrawRoutedPrincipalOnResolve(templateId, epochId);
-        (uint256 yieldFee, uint256 netYield) = _applyGrossYield(templateId, ledger, grossYield);
+        (uint256 yieldFee, uint256 netYield) = _applyGrossYield(templateId, epochId, ledger, grossYield);
 
         SettlementLogic.Outputs memory outputs = SettlementLogic.compute(e, netYield);
         _applyResolveAccounting(templateId, epochId, ledger, e, outputs, nowTs);
@@ -550,7 +551,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         emit YieldRouterFailureRecorded(yieldRouterFailureCount, yieldRouterDisabled);
     }
 
-    function _applyGrossYield(bytes32 templateId, MarketTypes.Ledger storage ledger, uint256 grossYield)
+    function _applyGrossYield(bytes32 templateId, uint64 epochId, MarketTypes.Ledger storage ledger, uint256 grossYield)
         internal
         returns (uint256 yieldFee, uint256 netYield)
     {
@@ -559,7 +560,7 @@ contract MarketEngineCoreLifecycleModule is MarketEngineState, ReentrancyGuardTr
         _vaults[templateId].active += grossYield;
         ledger.increaseActiveCollateral(grossYield);
 
-        uint256 bps = uint256(yieldFeeBps);
+        uint256 bps = uint256(_epochYieldFeeBps[templateId][epochId]);
         uint256 q = grossYield / 10_000;
         uint256 r = grossYield % 10_000;
         yieldFee = (q * bps) + ((r * bps) / 10_000);

@@ -408,6 +408,10 @@ abstract contract MarketEngineBase is Test {
         dispatcher.setSelectorModule(
             bytes4(keccak256("reconcileEpochRoutedPrincipal(bytes32,uint64,uint256)")), adminModule, false
         );
+        dispatcher.setSelectorModule(
+            bytes4(keccak256("reassignRecoveredBalance(bytes32,bytes32,uint256)")), adminModule, false
+        );
+        dispatcher.setSelectorModule(bytes4(keccak256("finalizeRecoveredYield(bytes32)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("initializeMarket(bytes32)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("withdrawFees(bytes32,uint256)")), adminModule, false);
 

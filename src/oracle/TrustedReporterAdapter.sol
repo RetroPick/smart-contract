@@ -16,13 +16,13 @@ import {IEventOracle} from "../interfaces/IEventOracle.sol";
 ///      (threshold signatures, timelocked rotation, dispute games) require a different oracle module or upgrade.
 contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
     bytes32 private constant LOCK_CLAIM_TYPEHASH = keccak256(
-        "LockClaim(bytes32 marketId,int256 valueE8,uint64 observedAt,bytes32 dataSourceHash)"
+        "LockClaim(bytes32 marketId,int256 valueE8,uint64 observedAt,bytes32 dataSourceHash,uint256 nonce,uint256 reporterEpoch)"
     );
     bytes32 private constant RESOLVE_CLAIM_TYPEHASH = keccak256(
-        "ResolveClaim(bytes32 marketId,int256 valueE8,uint64 observedAt,bytes32 dataSourceHash)"
+        "ResolveClaim(bytes32 marketId,int256 valueE8,uint64 observedAt,bytes32 dataSourceHash,uint256 nonce,uint256 reporterEpoch)"
     );
     bytes32 private constant OHLC_CLAIM_TYPEHASH = keccak256(
-        "OhlcClaim(bytes32 marketId,int256 highE8,int256 lowE8,int256 closeE8,uint64 observedAt,bytes32 dataSourceHash)"
+        "OhlcClaim(bytes32 marketId,int256 highE8,int256 lowE8,int256 closeE8,uint64 observedAt,bytes32 dataSourceHash,uint256 nonce,uint256 reporterEpoch)"
     );
 
     uint256 public constant MIN_MAX_SIGNATURE_AGE = 60;
@@ -30,6 +30,7 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
 
     address public trustedReporter;
     uint256 public maxSignatureAgeSeconds;
+    uint256 public reporterEpoch;
 
     struct Sample {
         int256 valueE8;
@@ -50,6 +51,9 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
     mapping(bytes32 marketId => Sample) private _lockSamples;
     mapping(bytes32 marketId => Sample) private _resolveSamples;
     mapping(bytes32 marketId => OhlcSample) private _ohlcSamples;
+    mapping(bytes32 marketId => uint256 nonce) private _lockNonces;
+    mapping(bytes32 marketId => uint256 nonce) private _resolveNonces;
+    mapping(bytes32 marketId => uint256 nonce) private _ohlcNonces;
 
     event TrustedReporterUpdated(address indexed previousReporter, address indexed newReporter);
     event MaxSignatureAgeUpdated(uint256 previousSeconds, uint256 newSeconds);
@@ -79,6 +83,9 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
         if (newReporter == address(0)) revert ZeroAddress();
         emit TrustedReporterUpdated(trustedReporter, newReporter);
         trustedReporter = newReporter;
+        unchecked {
+            ++reporterEpoch;
+        }
     }
 
     function setMaxSignatureAgeSeconds(uint256 newMax) external onlyOwner {
@@ -129,8 +136,7 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
             if (block.timestamp - uint256(observedAt) > maxSignatureAgeSeconds) revert SignatureTooOld();
         }
         if (highE8 < lowE8 || closeE8 < lowE8 || closeE8 > highE8) revert InvalidOhlc();
-        bytes32 structHash =
-            keccak256(abi.encode(OHLC_CLAIM_TYPEHASH, marketId, highE8, lowE8, closeE8, observedAt, dataSourceHash));
+        bytes32 structHash = _ohlcStructHash(marketId, highE8, lowE8, closeE8, observedAt, dataSourceHash);
         bytes32 digest = _hashTypedDataV4(structHash);
         address signer = ECDSA.recoverCalldata(digest, signature);
         if (signer != trustedReporter) revert InvalidReporterSignature();
@@ -146,12 +152,19 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
     /// @notice Owner can clear a lock sample before the engine consumes it (mis-post recovery).
     function clearLockSample(bytes32 marketId) external onlyOwner {
         delete _lockSamples[marketId];
+        unchecked {
+            ++_lockNonces[marketId];
+        }
         emit LockSampleCleared(marketId);
     }
 
     /// @notice Owner can clear a resolve sample before the engine consumes it (mis-post recovery).
     function clearResolveResult(bytes32 marketId) external onlyOwner {
         delete _resolveSamples[marketId];
+        unchecked {
+            ++_resolveNonces[marketId];
+            ++_ohlcNonces[marketId];
+        }
         emit ResolveResultCleared(marketId);
     }
 
@@ -159,6 +172,10 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
     /// @dev Clearing OHLC restores the ability to post a scalar resolve result for the same marketId.
     function clearOhlcResult(bytes32 marketId) external onlyOwner {
         delete _ohlcSamples[marketId];
+        unchecked {
+            ++_resolveNonces[marketId];
+            ++_ohlcNonces[marketId];
+        }
         emit OhlcResultCleared(marketId);
     }
 
@@ -193,7 +210,19 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
         view
         returns (bytes32)
     {
-        return _hashTypedDataV4(keccak256(abi.encode(LOCK_CLAIM_TYPEHASH, marketId, valueE8, observedAt, dataSourceHash)));
+        return _hashTypedDataV4(
+            keccak256(
+                abi.encode(
+                    LOCK_CLAIM_TYPEHASH,
+                    marketId,
+                    valueE8,
+                    observedAt,
+                    dataSourceHash,
+                    _lockNonces[marketId],
+                    reporterEpoch
+                )
+            )
+        );
     }
 
     /// @notice EIP-712 digest the trusted reporter signs for `postResolveResult`.
@@ -203,7 +232,17 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
         returns (bytes32)
     {
         return _hashTypedDataV4(
-            keccak256(abi.encode(RESOLVE_CLAIM_TYPEHASH, marketId, valueE8, observedAt, dataSourceHash))
+            keccak256(
+                abi.encode(
+                    RESOLVE_CLAIM_TYPEHASH,
+                    marketId,
+                    valueE8,
+                    observedAt,
+                    dataSourceHash,
+                    _resolveNonces[marketId],
+                    reporterEpoch
+                )
+            )
         );
     }
 
@@ -216,9 +255,19 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
         uint64 observedAt,
         bytes32 dataSourceHash
     ) external view returns (bytes32) {
-        return _hashTypedDataV4(
-            keccak256(abi.encode(OHLC_CLAIM_TYPEHASH, marketId, highE8, lowE8, closeE8, observedAt, dataSourceHash))
-        );
+        return _hashTypedDataV4(_ohlcStructHash(marketId, highE8, lowE8, closeE8, observedAt, dataSourceHash));
+    }
+
+    function lockClaimNonce(bytes32 marketId) external view returns (uint256) {
+        return _lockNonces[marketId];
+    }
+
+    function resolveClaimNonce(bytes32 marketId) external view returns (uint256) {
+        return _resolveNonces[marketId];
+    }
+
+    function ohlcClaimNonce(bytes32 marketId) external view returns (uint256) {
+        return _ohlcNonces[marketId];
     }
 
     function getLockSample(bytes32 marketId)
@@ -267,7 +316,17 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
         }
 
         bytes32 structHash =
-            keccak256(abi.encode(typeHash, marketId, valueE8, observedAt, dataSourceHash));
+            keccak256(
+                abi.encode(
+                    typeHash,
+                    marketId,
+                    valueE8,
+                    observedAt,
+                    dataSourceHash,
+                    _claimNonce(typeHash, marketId),
+                    reporterEpoch
+                )
+            );
         bytes32 digest = _hashTypedDataV4(structHash);
         address signer = ECDSA.recoverCalldata(digest, signature);
         if (signer != trustedReporter) revert InvalidReporterSignature();
@@ -276,5 +335,35 @@ contract TrustedReporterAdapter is IEventOracle, EIP712, Ownable2Step {
         dest.observedAt = observedAt;
         dest.written = true;
         dest.dataSourceHash = dataSourceHash;
+    }
+
+    function _ohlcStructHash(
+        bytes32 marketId,
+        int256 highE8,
+        int256 lowE8,
+        int256 closeE8,
+        uint64 observedAt,
+        bytes32 dataSourceHash
+    ) private view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                OHLC_CLAIM_TYPEHASH,
+                marketId,
+                highE8,
+                lowE8,
+                closeE8,
+                observedAt,
+                dataSourceHash,
+                _ohlcNonces[marketId],
+                reporterEpoch
+            )
+        );
+    }
+
+    function _claimNonce(bytes32 typeHash, bytes32 marketId) private view returns (uint256) {
+        if (typeHash == LOCK_CLAIM_TYPEHASH) return _lockNonces[marketId];
+        if (typeHash == RESOLVE_CLAIM_TYPEHASH) return _resolveNonces[marketId];
+        if (typeHash == OHLC_CLAIM_TYPEHASH) return _ohlcNonces[marketId];
+        return 0;
     }
 }

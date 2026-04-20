@@ -252,6 +252,44 @@ contract MarketEngineYieldRoutingTest is MarketEngineBase {
         assertEq(engine.epochs(tid, 1).routedPrincipal, 0);
     }
 
+    function test_manualResolve_uses_epoch_snapshotted_yield_fee_after_mid_epoch_fee_change() public {
+        bytes32 tid = _tid("thr");
+        uint64 t0 = 4_700_000;
+        _initManualThresholdMarket(tid, t0);
+
+        pool.setYieldBps(2000); // 20% gross yield
+
+        token.mint(alice, 1000);
+        token.mint(bob, 1000);
+
+        vm.startPrank(alice);
+        token.approve(address(engine), 1000);
+        engine.depositToSide(tid, 1, 0, 1000);
+        vm.stopPrank();
+
+        vm.startPrank(bob);
+        token.approve(address(engine), 1000);
+        engine.depositToSide(tid, 1, 1, 1000);
+        vm.stopPrank();
+
+        vm.prank(admin);
+        engine.setYieldRouter(address(router), 5000); // 50%, should not affect epoch 1
+
+        vm.warp(t0 + 21);
+        oracle.set(feed, 200e8, uint64(t0 + 21), 0);
+        vm.prank(worker);
+        engine.lockEpoch(tid, 1);
+
+        vm.warp(t0 + 25);
+        oracle.set(feed, 200e8, uint64(t0 + 25), 0);
+
+        vm.expectEmit(true, true, false, true);
+        emit MarketEngineState.EpochYieldAccrued(tid, 1, 380, 38, 342);
+
+        vm.prank(worker);
+        engine.resolveEpoch(tid, 1);
+    }
+
     function test_deposit_failedRouting_doesNotIncreaseEpochRoutedPrincipal() public {
         bytes32 tid = _tid("thr");
         uint64 t0 = 3_000_000;

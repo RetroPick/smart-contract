@@ -137,7 +137,7 @@ contract MarketEngineEmergencyRecoveryTest is MarketEngineBase {
         vm.prank(admin);
         engine.setYieldRouter(address(liar), 0);
 
-        token.mint(alice, 1000 ether);
+        token.mint(alice, 2000 ether);
         vm.startPrank(alice);
         token.approve(address(engine), type(uint256).max);
         engine.depositToSide(tid, 1, 0, 1000 ether);
@@ -206,6 +206,37 @@ contract MarketEngineEmergencyRecoveryTest is MarketEngineBase {
         assertEq(token.balanceOf(address(engine)), active + claims + fees);
     }
 
+    function test_reassignRecoveredBalance_reverts_when_destination_template_invalid() public {
+        bytes32 tid = _tid("recover-reassign");
+        bytes32 tidB = _tid("recover-reassign-b");
+        uint64 t0 = 9_350_000;
+        _initManualThresholdMarket(tid, t0, "recover-reassign");
+        _initManualThresholdMarket(tidB, t0, "recover-reassign-b");
+
+        token.mint(alice, 2000 ether);
+        vm.startPrank(alice);
+        token.approve(address(engine), type(uint256).max);
+        engine.depositToSide(tid, 1, 0, 1000 ether);
+        engine.depositToSide(tidB, 1, 0, 1000 ether);
+        vm.stopPrank();
+
+        uint256 routed = engine.epochs(tid, 1).routedPrincipal;
+        token.mint(address(router), 50 ether);
+
+        bytes32 invalidTemplateId = keccak256("invalid-template");
+
+        vm.startPrank(admin);
+        engine.pauseProgram(true);
+        engine.yieldEmergencyWithdraw(tid);
+        engine.reconcileEpochRoutedPrincipal(tid, 1, routed);
+
+        vm.expectRevert(MarketEngineState.InvalidTemplate.selector);
+        engine.reassignRecoveredBalance(tid, invalidTemplateId, 1000 ether);
+
+        assertEq(engine.unreconciledRecoveredByTemplate(tid), 1000 ether);
+        vm.stopPrank();
+    }
+
     function test_emergencyRecovery_reverts_when_protocol_not_paused() public {
         bytes32 tid = _tid("recover-live");
         uint64 t0 = 9_400_000;
@@ -227,6 +258,16 @@ contract MarketEngineEmergencyRecoveryTest is MarketEngineBase {
         vm.prank(admin);
         vm.expectRevert(MarketEngineState.ProtocolPaused.selector);
         engine.reconcileEpochRoutedPrincipal(tid, 1, routed);
+    }
+
+    function test_yieldEmergencyWithdraw_reverts_for_invalid_template() public {
+        bytes32 invalidTemplateId = keccak256("invalid-template");
+
+        vm.startPrank(admin);
+        engine.pauseProgram(true);
+        vm.expectRevert(MarketEngineState.InvalidTemplate.selector);
+        engine.yieldEmergencyWithdraw(invalidTemplateId);
+        vm.stopPrank();
     }
 
     function test_recoveryPending_blocks_rolling_userops_and_round_execution_until_full_reconcile() public {
@@ -300,5 +341,61 @@ contract MarketEngineEmergencyRecoveryTest is MarketEngineBase {
 
         vm.prank(worker);
         engine.executeRollingRound(tid);
+    }
+
+    function test_crossTemplate_emergencyWithdraw_misattribution_cannot_be_cleared_by_booking_other_template_principal_to_fees()
+        public
+    {
+        bytes32 tidA = _tid("recover-cross-a");
+        bytes32 tidB = _tid("recover-cross-b");
+        uint64 t0 = 9_600_000;
+
+        _initManualThresholdMarket(tidA, t0, "recover-cross-a");
+        _initManualThresholdMarket(tidB, t0 + 1_000, "recover-cross-b");
+
+        address bob = address(0xB0B);
+        token.mint(alice, 1000 ether);
+        token.mint(bob, 1000 ether);
+
+        vm.warp(t0 + 1);
+        vm.startPrank(alice);
+        token.approve(address(engine), type(uint256).max);
+        engine.depositToSide(tidA, 1, 0, 1000 ether);
+        vm.stopPrank();
+
+        vm.warp(t0 + 1_001);
+        vm.startPrank(bob);
+        token.approve(address(engine), type(uint256).max);
+        engine.depositToSide(tidB, 1, 0, 1000 ether);
+        vm.stopPrank();
+
+        uint256 routedA = engine.epochs(tidA, 1).routedPrincipal;
+        uint256 routedB = engine.epochs(tidB, 1).routedPrincipal;
+        assertGt(routedA, 0);
+        assertGt(routedB, 0);
+
+        vm.startPrank(admin);
+        engine.pauseProgram(true);
+
+        // MockPartialYieldRouter emergencyWithdraw(bytes32) drains the entire pooled router balance,
+        // which simulates a buggy/malicious router misattributing template B principal to template A recovery.
+        engine.yieldEmergencyWithdraw(tidA);
+        assertEq(engine.unreconciledRecoveredByTemplate(tidA), routedA + routedB);
+
+        engine.reconcileEpochRoutedPrincipal(tidA, 1, routedA);
+
+        (, , uint256 feesA) = engine.getVaultBalances(tidA);
+        assertEq(feesA, 0, "template A must not absorb template B principal as fees");
+        assertEq(engine.unreconciledRecoveredByTemplate(tidA), routedB, "misattributed balance must remain unreconciled");
+
+        vm.expectRevert(abi.encodeWithSelector(MarketEngineState.UnsafeToUnpause.selector, false, routedB));
+        engine.pauseProgram(false);
+
+        // Reassign the misattributed recovered balance to the correct template, then finish recovery.
+        engine.reassignRecoveredBalance(tidA, tidB, routedB);
+        engine.reconcileEpochRoutedPrincipal(tidB, 1, routedB);
+        engine.finalizeRecoveredYield(tidA);
+        engine.pauseProgram(false);
+        vm.stopPrank();
     }
 }

@@ -143,6 +143,7 @@ contract MarketEngineAdminModule is MarketEngineState {
     function yieldEmergencyWithdraw(bytes32 templateId) external {
         _authAdmin();
         if (!globalPaused) revert ProtocolPaused();
+        if (_templates[templateId].version == 0 || !_ledgers[templateId].initialized) revert InvalidTemplate();
         IYieldRouterV2 r = yieldRouter;
         if (address(r) == address(0)) revert Unauthorized();
         uint256 balBefore = stakeToken.balanceOf(address(this));
@@ -178,17 +179,35 @@ contract MarketEngineAdminModule is MarketEngineState {
             _unreconciledRecoveredByTemplate[templateId] = availableRecovered - recoveredPrincipal;
             totalUnreconciledRecovered -= recoveredPrincipal;
         }
-        if (_templateRoutedPrincipal[templateId] == 0) {
-            uint256 excessRecovered = _unreconciledRecoveredByTemplate[templateId];
-            if (excessRecovered > 0) {
-                _unreconciledRecoveredByTemplate[templateId] = 0;
-                totalUnreconciledRecovered -= excessRecovered;
-                _vaults[templateId].fees += excessRecovered;
-                _ledgers[templateId].feeReserveTotal += excessRecovered;
-                emit EmergencyRecoveredYieldBooked(templateId, excessRecovered);
-            }
+        if (totalRoutedPrincipal == 0) {
+            _finalizeRecoveredYield(templateId);
         }
         emit EpochRoutedPrincipalReconciled(templateId, epochId, recoveredPrincipal, e.routedPrincipal);
+    }
+
+    function finalizeRecoveredYield(bytes32 templateId) external {
+        _authAdmin();
+        if (!globalPaused) revert ProtocolPaused();
+        if (_templates[templateId].version == 0 || !_ledgers[templateId].initialized) revert InvalidTemplate();
+        if (totalRoutedPrincipal != 0) revert OutstandingRoutedPrincipal(totalRoutedPrincipal);
+        _finalizeRecoveredYield(templateId);
+    }
+
+    function reassignRecoveredBalance(bytes32 fromTemplateId, bytes32 toTemplateId, uint256 amount) external {
+        _authAdmin();
+        if (!globalPaused) revert ProtocolPaused();
+        if (amount == 0) revert NothingToClaim();
+        if (fromTemplateId == toTemplateId) revert InvalidTemplate();
+        if (_templates[toTemplateId].version == 0 || !_ledgers[toTemplateId].initialized) revert InvalidTemplate();
+        uint256 availableRecovered = _unreconciledRecoveredByTemplate[fromTemplateId];
+        if (amount > availableRecovered) {
+            revert UnreconciledRecoveryInsufficient(fromTemplateId, availableRecovered, amount);
+        }
+        unchecked {
+            _unreconciledRecoveredByTemplate[fromTemplateId] = availableRecovered - amount;
+            _unreconciledRecoveredByTemplate[toTemplateId] += amount;
+        }
+        emit EmergencyRecoveredBalanceReassigned(fromTemplateId, toTemplateId, amount);
     }
 
     function resetYieldRouterFailures() external {
@@ -232,5 +251,16 @@ contract MarketEngineAdminModule is MarketEngineState {
         if (oldOracle != address(0) && oldOracle != newOracle && !globalPaused) {
             revert OracleAdapterChangeRequiresPause(oldOracle, newOracle);
         }
+    }
+
+    function _finalizeRecoveredYield(bytes32 templateId) internal {
+        if (_templateRoutedPrincipal[templateId] != 0) return;
+        uint256 excessRecovered = _unreconciledRecoveredByTemplate[templateId];
+        if (excessRecovered == 0) return;
+        _unreconciledRecoveredByTemplate[templateId] = 0;
+        totalUnreconciledRecovered -= excessRecovered;
+        _vaults[templateId].fees += excessRecovered;
+        _ledgers[templateId].feeReserveTotal += excessRecovered;
+        emit EmergencyRecoveredYieldBooked(templateId, excessRecovered);
     }
 }

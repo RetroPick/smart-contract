@@ -284,6 +284,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         e.compositeLogic = t.compositeLogic;
         e.compositeAbsoluteThresholdsE8 = t.compositeAbsoluteThresholdsE8;
         _snapshotEpochOracleAdapter(templateId, epochId, t.templateOracleKind, t.oracleClass);
+        _epochYieldFeeBps[templateId][epochId] = yieldFeeBps;
 
         ledger.activeEpochId = epochId;
         ledger.rollingNextEpochId = epochId + 1;
@@ -473,7 +474,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
 
         uint256 grossYield = _withdrawResolvePrincipal(templateId, epochId, rollingLink);
         if (rollingLink && !_isRollingResolveActive(templateId)) return;
-        (uint256 yieldFee, uint256 netYield) = _applyGrossYield(templateId, ledger, grossYield);
+        (uint256 yieldFee, uint256 netYield) = _applyGrossYield(templateId, epochId, ledger, grossYield);
 
         SettlementLogic.Outputs memory outputs = SettlementLogic.compute(e, netYield);
         _applyResolveAccounting(templateId, epochId, ledger, e, outputs, nowTs);
@@ -573,7 +574,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         return _ledgers[templateId].rollingPhase == MarketTypes.RollingPhase.Live;
     }
 
-    function _applyGrossYield(bytes32 templateId, MarketTypes.Ledger storage ledger, uint256 grossYield)
+    function _applyGrossYield(bytes32 templateId, uint64 epochId, MarketTypes.Ledger storage ledger, uint256 grossYield)
         internal
         returns (uint256 yieldFee, uint256 netYield)
     {
@@ -581,7 +582,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
 
         _vaults[templateId].active += grossYield;
         ledger.increaseActiveCollateral(grossYield);
-        uint256 bps = uint256(yieldFeeBps);
+        uint256 bps = uint256(_epochYieldFeeBps[templateId][epochId]);
         uint256 q = grossYield / 10_000;
         uint256 r = grossYield % 10_000;
         yieldFee = (q * bps) + ((r * bps) / 10_000);

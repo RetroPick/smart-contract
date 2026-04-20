@@ -121,6 +121,8 @@ interface IMarketEngine {
     function setWorkerAuthority(address worker) external;
     function yieldEmergencyWithdraw(bytes32 templateId) external;
     function reconcileEpochRoutedPrincipal(bytes32 templateId, uint64 epochId, uint256 recoveredPrincipal) external;
+    function reassignRecoveredBalance(bytes32 fromTemplateId, bytes32 toTemplateId, uint256 amount) external;
+    function finalizeRecoveredYield(bytes32 templateId) external;
     function withdrawFees(bytes32 templateId, uint256 amount) external;
 
     function openEpoch(bytes32 templateId, uint64 epochId, uint64 openAt, uint64 lockAt, uint64 resolveAt) external;

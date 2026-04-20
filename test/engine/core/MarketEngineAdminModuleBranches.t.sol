@@ -98,7 +98,12 @@ contract MarketEngineAdminModuleBranchesTest is MarketEngineBase {
     }
 
     function test_yieldEmergencyWithdraw_reverts_when_router_unset_even_if_paused() public {
-        bytes32 tid = bytes32("t");
+        bytes32 tid = _tid("paused-unset-router");
+
+        vm.prank(admin);
+        engine.upsertTemplate(_defaultThresholdTemplate("paused-unset-router"));
+        vm.prank(admin);
+        engine.initializeMarket(tid);
 
         vm.startPrank(admin);
         engine.pauseProgram(true);

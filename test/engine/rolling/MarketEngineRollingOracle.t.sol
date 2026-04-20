@@ -9,6 +9,7 @@ import {IPriceOracle} from "../../../src/interfaces/IPriceOracle.sol";
 import {MockAavePool} from "../../../src/test/MockAavePool.sol";
 import {MockAToken} from "../../../src/test/MockAToken.sol";
 import {MockPriceOracle} from "../../../src/test/MockPriceOracle.sol";
+import {MarketEngineState} from "../../../src/engine/MarketEngineState.sol";
 import {YieldRouterAaveV3} from "../../../src/yield/YieldRouterAaveV3.sol";
 
 /// @notice Rolling oracle and timing: buffers, confidence, early calls, batch.
@@ -296,6 +297,55 @@ contract MarketEngineRollingOracleTest is MarketEngineBase {
         (MarketTypes.RollingPhase phase, MarketTypes.RollingHaltReason reason,,,,) = engine.getRollingLifecycle(tid);
         assertEq(uint8(phase), uint8(MarketTypes.RollingPhase.Halted));
         assertEq(uint8(reason), uint8(MarketTypes.RollingHaltReason.OracleFailure));
+    }
+
+    function test_rollingResolve_uses_prev_epoch_snapshotted_yield_fee_after_mid_epoch_fee_change() public {
+        MockAToken aToken = new MockAToken();
+        MockAavePool pool = new MockAavePool(address(token), address(aToken));
+        YieldRouterAaveV3 localRouter = new YieldRouterAaveV3(address(token), address(pool), address(aToken), address(engine));
+
+        vm.prank(admin);
+        engine.setYieldRouter(address(localRouter), 1000); // 10%
+
+        vm.startPrank(admin);
+        engine.upsertTemplate(_directionRollingTemplate("roll_fee_snap", INTER, 10));
+        bytes32 tid = _tid("roll_fee_snap");
+        engine.initializeMarket(tid);
+        vm.stopPrank();
+
+        uint64 t0 = 463_000;
+        vm.warp(t0);
+        vm.prank(worker);
+        engine.genesisStartRolling(tid);
+
+        token.mint(address(this), 1e24);
+        token.approve(address(engine), type(uint256).max);
+        vm.warp(t0 + 10);
+        engine.depositToSide(tid, 1, 0, 1000);
+
+        pool.setYieldBps(2000);
+
+        uint64 lockTs = t0 + INTER;
+        vm.warp(lockTs);
+        oracle.set(feed, 100e8, lockTs, 0);
+        vm.prank(worker);
+        engine.genesisLockRolling(tid);
+
+        vm.warp(t0 + 150);
+        engine.depositToSide(tid, 2, 0, 1000);
+
+        vm.prank(admin);
+        engine.setYieldRouter(address(localRouter), 5000); // 50%, should not affect epoch 1 resolution
+
+        uint64 execTs = t0 + 2 * INTER;
+        vm.warp(execTs);
+        oracle.set(feed, 110e8, execTs, 0);
+
+        vm.expectEmit(true, true, false, true);
+        emit MarketEngineState.EpochYieldAccrued(tid, 1, 190, 19, 171);
+
+        vm.prank(worker);
+        engine.executeRollingRound(tid);
     }
 
     /// @dev Batch loops templates: oracle failure on one feed does not stop the other template in the same tx.
