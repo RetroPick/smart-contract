@@ -102,6 +102,143 @@ interface IMarketEngine {
         uint16 oracleMaxConfidenceBps;
     }
 
+    enum PositionViewStatus {
+        NoPosition,
+        Active,
+        Claimable,
+        Claimed,
+        SettledNoPayout
+    }
+
+    struct MarketView {
+        bytes32 templateId;
+        string slug;
+        string assetSymbol;
+        MarketTypes.MarketType marketType;
+        MarketTypes.ExecutionMode executionMode;
+        MarketTypes.OracleKind templateOracleKind;
+        MarketTypes.OracleClass oracleClass;
+        address eventOracle;
+        uint8 outcomeCount;
+        bool active;
+        uint64 activeEpochId;
+        bool globalPaused;
+        bool userOpsBlocked;
+        MarketTypes.RollingPhase rollingPhase;
+        MarketTypes.RollingHaltReason rollingHaltReason;
+        uint16 switchFeeBps;
+        uint16 settlementFeeBps;
+        bool yieldRouterAssigned;
+    }
+
+    struct EpochView {
+        bytes32 templateId;
+        uint64 epochId;
+        MarketTypes.EpochStatus status;
+        MarketTypes.CancelReason cancelReason;
+        uint64 openAt;
+        uint64 lockAt;
+        uint64 resolveAt;
+        uint64 createdAt;
+        uint64 lockedAt;
+        uint64 resolvedAt;
+        uint256 totalPool;
+        uint32 totalPositions;
+        bool claimable;
+        bool refundMode;
+        uint256 winningOutcomeMask;
+        uint256 claimLiabilityTotal;
+        uint256 totalRefundLiability;
+        uint256 settlementFeeTotal;
+        uint256 claimedTotal;
+        uint256 remainingWinningStake;
+        uint256 routedPrincipal;
+        bool settledClaimRoutingEnabled;
+        uint256 settledClaimBaseOutstanding;
+        uint256 settledClaimPrincipalOutstanding;
+        uint256 settledClaimCurrentValue;
+        uint64 oracleMaxDelaySeconds;
+        uint16 oracleMaxConfidenceBps;
+        MarketTypes.OracleCheckpoint checkpointA;
+        MarketTypes.OracleCheckpoint checkpointB;
+        bool hasSecondaryCheckpoints;
+        bool hasCompositeCheckpoints;
+    }
+
+    struct OutcomeView {
+        uint8 outcomeIndex;
+        uint256 poolSize;
+        uint256 impliedProbabilityE6;
+        uint256 displayPercentE4;
+        bool isWinner;
+        bool isActiveQuote;
+        uint256 grossPayoutXE6;
+    }
+
+    struct PositionView {
+        bool initialized;
+        bool claimed;
+        bool claimableNow;
+        PositionViewStatus status;
+        uint256[8] stakes;
+        uint256 totalStake;
+        uint256 entryFeesPaid;
+        uint256 switchFeesPaid;
+        uint256 claimedAmount;
+        uint256 pendingClaimAmount;
+        uint256 pendingRefundAmount;
+        uint256 winningStake;
+        bool settledClaimRoutingEnabled;
+    }
+
+    struct TemplateYieldView {
+        bool routerAssigned;
+        bool routerDisabled;
+        bool recoveryPending;
+        IYieldRouterV2.YieldPath yieldPath;
+        uint256 currentPrincipal;
+        uint256 currentValue;
+        uint256 unrealizedYieldAmount;
+        uint256 yieldRatioE6;
+        uint256 scaledPrincipal;
+        uint256 stataShares;
+        uint16 yieldFeeBpsCurrent;
+    }
+
+    struct OperatorTemplateView {
+        uint64 activeEpochId;
+        uint64 lastResolvedEpochId;
+        uint64 haltedAtEpochId;
+        uint64 rollingNextEpochId;
+        MarketTypes.RollingPhase rollingPhase;
+        MarketTypes.RollingHaltReason rollingHaltReason;
+        uint256 activeVault;
+        uint256 claimsVault;
+        uint256 feesVault;
+        uint256 templateRoutedPrincipal;
+        uint256 templateSettledClaimsRoutedPrincipal;
+        uint256 unreconciledRecoveredAmount;
+        bool userOpsBlocked;
+        bool unsafeToUnpauseForTemplate;
+    }
+
+    struct OperatorGlobalView {
+        bool globalPaused;
+        address yieldRouter;
+        bool yieldRouterDisabled;
+        uint8 yieldRouterFailureCount;
+        uint256 totalRoutedPrincipal;
+        uint256 totalUnreconciledRecovered;
+        address admin;
+        address treasury;
+        address workerAuthority;
+        address priceOracle;
+        address rateOracle;
+        address smartDataOracle;
+        address macroOracle;
+        address equityOracle;
+    }
+
     function initialize(InitConfig calldata config) external;
 
     function upsertTemplate(UpsertTemplateParams calldata p) external;
@@ -121,6 +258,7 @@ interface IMarketEngine {
     function setWorkerAuthority(address worker) external;
     function yieldEmergencyWithdraw(bytes32 templateId) external;
     function reconcileEpochRoutedPrincipal(bytes32 templateId, uint64 epochId, uint256 recoveredPrincipal) external;
+    function recoverRoutedSettledClaims(bytes32 templateId, uint64 epochId, uint256 recoveredAmount) external;
     function reassignRecoveredBalance(bytes32 fromTemplateId, bytes32 toTemplateId, uint256 amount) external;
     function finalizeRecoveredYield(bytes32 templateId) external;
     function withdrawFees(bytes32 templateId, uint256 amount) external;
@@ -185,6 +323,14 @@ interface IMarketEngine {
             uint64 lastResolvedEpochId
         );
     function getEpoch(bytes32 templateId, uint64 epochId) external view returns (MarketTypes.Epoch memory);
+    function getMarketView(bytes32 templateId) external view returns (MarketView memory);
+    function getEpochView(bytes32 templateId, uint64 epochId) external view returns (EpochView memory);
+    function getActiveEpochView(bytes32 templateId) external view returns (EpochView memory);
+    function getOutcomeViews(bytes32 templateId, uint64 epochId) external view returns (OutcomeView[] memory);
+    function getPositionView(bytes32 templateId, uint64 epochId, address user) external view returns (PositionView memory);
+    function getTemplateYieldView(bytes32 templateId) external view returns (TemplateYieldView memory);
+    function getOperatorTemplateView(bytes32 templateId) external view returns (OperatorTemplateView memory);
+    function getOperatorGlobalView() external view returns (OperatorGlobalView memory);
 
     function configInitialized() external view returns (bool);
     function stakeToken() external view returns (IERC20);

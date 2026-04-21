@@ -122,8 +122,8 @@ contract MarketEngineDispatcherTest is Test {
     }
 
     function test_fallback_reverts_when_module_not_set() public {
-        bytes4 selector = bytes4(keccak256("withdrawFees(bytes32,uint256)"));
-        (bool ok, bytes memory ret) = address(engine).call(abi.encodeWithSelector(selector, bytes32("x"), 1));
+        bytes4 selector = bytes4(keccak256("getVaultBalances(bytes32)"));
+        (bool ok, bytes memory ret) = address(engine).call(abi.encodeWithSelector(selector, bytes32("x")));
         assertFalse(ok);
         bytes4 errSel;
         assembly {
@@ -256,7 +256,7 @@ contract MarketEngineDispatcherTest is Test {
     }
 
     function test_revokeModule_blocks_delegatecall_path() public {
-        bytes4 selector = bytes4(keccak256("pauseProgram(bool)"));
+        bytes4 selector = bytes4(keccak256("getVaultBalances(bytes32)"));
         _registerMockModule();
 
         vm.prank(admin);
@@ -265,8 +265,7 @@ contract MarketEngineDispatcherTest is Test {
         vm.prank(admin);
         engine.revokeModule(address(module));
 
-        vm.prank(admin);
-        (bool ok, bytes memory ret) = address(engine).call(abi.encodeWithSignature("pauseProgram(bool)", true));
+        (bool ok, bytes memory ret) = address(engine).call(abi.encodeWithSelector(selector, bytes32("x")));
         assertFalse(ok);
         bytes4 errSel;
         assembly {

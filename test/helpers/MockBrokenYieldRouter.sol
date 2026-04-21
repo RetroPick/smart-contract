@@ -37,11 +37,42 @@ contract MockBrokenYieldRouter is IYieldRouterV2 {
         return 1;
     }
 
+    function depositDetailed(bytes32, uint256 amount)
+        external
+        pure
+        override
+        returns (uint256 principalAdded, uint256 attributionUnitsAdded)
+    {
+        return (amount, 1);
+    }
+
     function withdrawScaled(bytes32, uint256) external pure override returns (uint256) {
         revert WithdrawAlwaysFails();
     }
 
+    function withdrawDetailed(bytes32, uint256)
+        external
+        pure
+        override
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+    {
+        revert WithdrawAlwaysFails();
+    }
+
+    function withdrawAttribution(bytes32, uint256)
+        external
+        pure
+        override
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+    {
+        revert WithdrawAlwaysFails();
+    }
+
     function currentValueOf(bytes32) external pure override returns (uint256) {
+        return 0;
+    }
+
+    function previewValueByAttribution(bytes32, uint256) external pure override returns (uint256) {
         return 0;
     }
 

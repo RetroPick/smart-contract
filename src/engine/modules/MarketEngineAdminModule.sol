@@ -51,6 +51,9 @@ contract MarketEngineAdminModule is MarketEngineState {
         if (old != router && old != address(0) && totalRoutedPrincipal != 0) {
             revert OutstandingRoutedPrincipal(totalRoutedPrincipal);
         }
+        if (old != router) {
+            _syncYieldRouterApproval(old, router);
+        }
         yieldRouter = IYieldRouterV2(router);
         yieldFeeBps = router == address(0) ? 0 : feeBps;
         if (old != router) {
@@ -183,6 +186,47 @@ contract MarketEngineAdminModule is MarketEngineState {
             _finalizeRecoveredYield(templateId);
         }
         emit EpochRoutedPrincipalReconciled(templateId, epochId, recoveredPrincipal, e.routedPrincipal);
+    }
+
+    function recoverRoutedSettledClaims(bytes32 templateId, uint64 epochId, uint256 recoveredAmount) external {
+        _authAdmin();
+        if (!globalPaused) revert ProtocolPaused();
+        MarketTypes.Epoch storage e = _epochs[templateId][epochId];
+        if (!e.exists) revert InvalidEpochState();
+
+        SettledClaimRouting storage bucket = _settledClaimRouting[templateId][epochId];
+        if (!bucket.enabled || bucket.refundMode) revert InvalidEpochState();
+
+        uint256 availableRecovered = _unreconciledRecoveredByTemplate[templateId];
+        if (recoveredAmount > availableRecovered) {
+            revert UnreconciledRecoveryInsufficient(templateId, availableRecovered, recoveredAmount);
+        }
+
+        uint256 principalOutstanding = bucket.principalOutstanding;
+        _settledClaimRouting[templateId][epochId].enabled = false;
+        _settledClaimRouting[templateId][epochId].refundMode = false;
+        _settledClaimRouting[templateId][epochId].principalOutstanding = 0;
+        _settledClaimRouting[templateId][epochId].baseOutstanding = 0;
+        _settledClaimRouting[templateId][epochId].attributionOutstanding = 0;
+
+        unchecked {
+            totalRoutedPrincipal -= principalOutstanding;
+            _templateSettledClaimsRoutedPrincipal[templateId] -= principalOutstanding;
+            _unreconciledRecoveredByTemplate[templateId] = availableRecovered - recoveredAmount;
+            totalUnreconciledRecovered -= recoveredAmount;
+        }
+
+        if (recoveredAmount > 0) {
+            _vaults[templateId].claims += recoveredAmount;
+            _ledgers[templateId].claimsReserveTotal += recoveredAmount;
+        }
+        e.claimLiabilityTotal = e.claimedTotal + recoveredAmount;
+        emit EpochSettledClaimsRecovered(templateId, epochId, principalOutstanding, recoveredAmount);
+        emit EpochSettledClaimsRoutingDisabled(templateId, epochId);
+
+        if (totalRoutedPrincipal == 0) {
+            _finalizeRecoveredYield(templateId);
+        }
     }
 
     function finalizeRecoveredYield(bytes32 templateId) external {

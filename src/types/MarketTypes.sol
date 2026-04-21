@@ -257,6 +257,7 @@ library MarketTypes {
         uint256 totalRefundLiability;
         uint256 claimedTotal;
         uint256 remainingWinningStake;
+        uint256 winningPoolTotal;
         /// @dev Principal successfully routed into `yieldRouter` for this epoch.
         uint256 routedPrincipal;
         OracleKind templateOracleKind;
@@ -285,6 +286,7 @@ library MarketTypes {
 
     struct Position {
         uint8 version;
+        uint8 occupiedMask;
         uint256[MAX_OUTCOMES] stakes;
         uint256 totalStake;
         uint256 switchFeesPaid;
@@ -361,7 +363,7 @@ library MarketTypes {
     }
 
     /// @notice Total pool size across winning outcomes (memory epoch).
-    function winningPoolTotal(Epoch memory e) internal pure returns (uint256 sum) {
+    function totalWinningPool(Epoch memory e) internal pure returns (uint256 sum) {
         for (uint256 i = 0; i < e.outcomeCount; i++) {
             if ((e.winningOutcomeMask >> i) & 1 == 1) {
                 sum += e.outcomePools[i];
@@ -370,7 +372,7 @@ library MarketTypes {
     }
 
     /// @notice Total pool size across winning outcomes (storage epoch).
-    function winningPoolTotalStorage(Epoch storage e) internal view returns (uint256 sum) {
+    function totalWinningPoolStorage(Epoch storage e) internal view returns (uint256 sum) {
         for (uint256 i = 0; i < e.outcomeCount; i++) {
             if ((e.winningOutcomeMask >> i) & 1 == 1) {
                 sum += e.outcomePools[i];

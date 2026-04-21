@@ -53,14 +53,54 @@ contract MockPartialYieldRouter is IYieldRouterV2 {
         return amount;
     }
 
+    function depositDetailed(bytes32, uint256 amount)
+        external
+        override
+        returns (uint256 principalAdded, uint256 attributionUnitsAdded)
+    {
+        stakeToken.transferFrom(msg.sender, address(this), amount);
+        return (amount, amount);
+    }
+
     function withdrawScaled(bytes32, uint256 principalAmount) external override returns (uint256 grossAmount) {
         if (revertOnWithdraw) revert();
         grossAmount = (principalAmount * uint256(withdrawReturnBps)) / 10_000;
         stakeToken.transfer(msg.sender, grossAmount);
     }
 
+    function withdrawDetailed(bytes32, uint256 principalAmount)
+        external
+        override
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+    {
+        if (revertOnWithdraw) revert();
+        grossAmount = (principalAmount * uint256(withdrawReturnBps)) / 10_000;
+        stakeToken.transfer(msg.sender, grossAmount);
+        return (grossAmount, principalAmount, principalAmount);
+    }
+
+    function withdrawAttribution(bytes32, uint256 attributionUnits)
+        external
+        override
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+    {
+        if (revertOnWithdraw) revert();
+        grossAmount = (attributionUnits * uint256(withdrawReturnBps)) / 10_000;
+        stakeToken.transfer(msg.sender, grossAmount);
+        return (grossAmount, attributionUnits, attributionUnits);
+    }
+
     function currentValueOf(bytes32) external view override returns (uint256) {
         return stakeToken.balanceOf(address(this));
+    }
+
+    function previewValueByAttribution(bytes32, uint256 attributionUnits)
+        external
+        view
+        override
+        returns (uint256 currentValue)
+    {
+        return (attributionUnits * uint256(withdrawReturnBps)) / 10_000;
     }
 
     function claimLmRewards(bytes32)

@@ -285,10 +285,15 @@ contract MarketEngineRoutedRecoveryInvariants is StdInvariant, MarketEngineBase 
             for (uint64 i = 1; i <= handler.currentEpochIds(t); ++i) {
                 MarketTypes.Epoch memory e = engine.epochs(tids[t], i);
                 if (!e.exists) continue;
-                summed += e.routedPrincipal;
+                MarketEngine.EpochView memory v = engine.getEpochView(tids[t], i);
+                summed += v.routedPrincipal + v.settledClaimPrincipalOutstanding;
             }
         }
-        assertEq(engine.totalRoutedPrincipal(), summed, "global routed principal mismatch");
+        assertEq(
+            engine.totalRoutedPrincipal(),
+            summed,
+            "global routed principal mismatch (epoch.routedPrincipal + settledClaimPrincipalOutstanding)"
+        );
     }
 
     function invariant_totalUnreconciled_matches_sum_of_template_buckets() public view {

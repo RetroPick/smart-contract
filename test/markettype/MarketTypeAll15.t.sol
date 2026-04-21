@@ -550,35 +550,9 @@ contract MarketTypeAll15Test is MarketEngineBase {
     function _postTroOhlc(bytes32 marketId, int256 highE8, int256 lowE8, int256 closeE8, uint64 observedAt, bytes32 ds)
         internal
     {
-        bytes32 ohlcDigest = _hashOhlcClaim(marketId, highE8, lowE8, closeE8, observedAt, ds);
+        bytes32 ohlcDigest = tro.hashOhlcClaim(marketId, highE8, lowE8, closeE8, observedAt, ds);
         (uint8 ov, bytes32 orr, bytes32 ors) = vm.sign(TRO_PK, ohlcDigest);
         tro.postOhlcResult(marketId, highE8, lowE8, closeE8, observedAt, ds, abi.encodePacked(orr, ors, ov));
-    }
-
-    function _hashOhlcClaim(
-        bytes32 marketId,
-        int256 highE8,
-        int256 lowE8,
-        int256 closeE8,
-        uint64 observedAt,
-        bytes32 dataSourceHash
-    ) internal view returns (bytes32) {
-        bytes32 domainSeparator = keccak256(
-            abi.encode(
-                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-                keccak256(bytes("RetroPickTrustedReporter")),
-                keccak256(bytes("1")),
-                block.chainid,
-                address(tro)
-            )
-        );
-        bytes32 typeHash = keccak256(
-            "OhlcClaim(bytes32 marketId,int256 highE8,int256 lowE8,int256 closeE8,uint64 observedAt,bytes32 dataSourceHash)"
-        );
-        bytes32 structHash = keccak256(
-            abi.encode(typeHash, marketId, highE8, lowE8, closeE8, observedAt, dataSourceHash)
-        );
-        return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
     }
 
     function test_docsParity_matrix_checksum_and_bitcoinIrc_threshold_mode() public {

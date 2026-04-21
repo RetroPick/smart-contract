@@ -34,11 +34,42 @@ contract MockLyingEmergencyYieldRouter is IYieldRouterV2 {
         return amount;
     }
 
+    function depositDetailed(bytes32, uint256 amount)
+        external
+        pure
+        override
+        returns (uint256 principalAdded, uint256 attributionUnitsAdded)
+    {
+        return (amount, amount);
+    }
+
     function withdrawScaled(bytes32, uint256) external pure override returns (uint256 grossAmount) {
         return 0;
     }
 
+    function withdrawDetailed(bytes32, uint256 principalAmount)
+        external
+        pure
+        override
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+    {
+        return (0, principalAmount, principalAmount);
+    }
+
+    function withdrawAttribution(bytes32, uint256 attributionUnits)
+        external
+        pure
+        override
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+    {
+        return (0, attributionUnits, attributionUnits);
+    }
+
     function currentValueOf(bytes32) external pure override returns (uint256) {
+        return 0;
+    }
+
+    function previewValueByAttribution(bytes32, uint256) external pure override returns (uint256) {
         return 0;
     }
 

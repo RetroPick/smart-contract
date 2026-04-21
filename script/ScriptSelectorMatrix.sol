@@ -40,6 +40,7 @@ library ScriptSelectorMatrix {
         dispatcher.setSelectorModule(IMarketEngine.setLmRewardsEnabled.selector, m.admin, false);
         dispatcher.setSelectorModule(IMarketEngine.keeperClaimLmRewards.selector, m.admin, false);
         dispatcher.setSelectorModule(IMarketEngine.yieldEmergencyWithdraw.selector, m.admin, false);
+        dispatcher.setSelectorModule(IMarketEngine.recoverRoutedSettledClaims.selector, m.admin, false);
         dispatcher.setSelectorModule(IMarketEngine.initializeMarket.selector, m.admin, false);
         dispatcher.setSelectorModule(IMarketEngine.withdrawFees.selector, m.admin, false);
 
@@ -48,6 +49,14 @@ library ScriptSelectorMatrix {
         dispatcher.setSelectorModule(IMarketEngine.getVaultBalances.selector, m.viewModule, false);
         dispatcher.setSelectorModule(IMarketEngine.getRollingLifecycle.selector, m.viewModule, false);
         dispatcher.setSelectorModule(IMarketEngine.getEpoch.selector, m.viewModule, false);
+        dispatcher.setSelectorModule(IMarketEngine.getMarketView.selector, m.viewModule, false);
+        dispatcher.setSelectorModule(IMarketEngine.getEpochView.selector, m.viewModule, false);
+        dispatcher.setSelectorModule(IMarketEngine.getActiveEpochView.selector, m.viewModule, false);
+        dispatcher.setSelectorModule(IMarketEngine.getOutcomeViews.selector, m.viewModule, false);
+        dispatcher.setSelectorModule(IMarketEngine.getPositionView.selector, m.viewModule, false);
+        dispatcher.setSelectorModule(IMarketEngine.getTemplateYieldView.selector, m.viewModule, false);
+        dispatcher.setSelectorModule(IMarketEngine.getOperatorTemplateView.selector, m.viewModule, false);
+        dispatcher.setSelectorModule(IMarketEngine.getOperatorGlobalView.selector, m.viewModule, false);
         dispatcher.setSelectorModule(IMarketEngine.unreconciledRecoveredByTemplate.selector, m.viewModule, false);
 
         // User operations + claims selectors
@@ -79,7 +88,7 @@ library ScriptSelectorMatrix {
 
     /// @notice Every selector registered in `wireAll` — use in tests to detect wiring drift.
     function delegatedSelectors() internal pure returns (bytes4[] memory s) {
-        s = new bytes4[](39);
+        s = new bytes4[](48);
         uint256 i;
         s[i++] = IMarketEngine.pauseProgram.selector;
         s[i++] = IMarketEngine.setTreasury.selector;
@@ -94,12 +103,21 @@ library ScriptSelectorMatrix {
         s[i++] = IMarketEngine.setLmRewardsEnabled.selector;
         s[i++] = IMarketEngine.keeperClaimLmRewards.selector;
         s[i++] = IMarketEngine.yieldEmergencyWithdraw.selector;
+        s[i++] = IMarketEngine.recoverRoutedSettledClaims.selector;
         s[i++] = IMarketEngine.initializeMarket.selector;
         s[i++] = IMarketEngine.withdrawFees.selector;
         s[i++] = IMarketEngine.getUserEpochs.selector;
         s[i++] = IMarketEngine.getVaultBalances.selector;
         s[i++] = IMarketEngine.getRollingLifecycle.selector;
         s[i++] = IMarketEngine.getEpoch.selector;
+        s[i++] = IMarketEngine.getMarketView.selector;
+        s[i++] = IMarketEngine.getEpochView.selector;
+        s[i++] = IMarketEngine.getActiveEpochView.selector;
+        s[i++] = IMarketEngine.getOutcomeViews.selector;
+        s[i++] = IMarketEngine.getPositionView.selector;
+        s[i++] = IMarketEngine.getTemplateYieldView.selector;
+        s[i++] = IMarketEngine.getOperatorTemplateView.selector;
+        s[i++] = IMarketEngine.getOperatorGlobalView.selector;
         s[i++] = IMarketEngine.depositToSide.selector;
         s[i++] = IMarketEngine.depositToSideFor.selector;
         s[i++] = IMarketEngine.switchSide.selector;
@@ -120,7 +138,7 @@ library ScriptSelectorMatrix {
         s[i++] = IMarketEngine.haltRollingMarket.selector;
         s[i++] = IMarketEngine.cancelRollingEpochWhileHalted.selector;
         s[i++] = IMarketEngine.resetRollingLifecycle.selector;
-        require(i == 39, "delegatedSelectors length");
+        require(i == 48, "delegatedSelectors length");
     }
 
     /// @dev Reverts with `selector not wired` if any delegated selector maps to `address(0)`.

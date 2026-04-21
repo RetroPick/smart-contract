@@ -315,7 +315,7 @@ contract MarketEngineYieldRoutingTest is MarketEngineBase {
         assertEq(e.routedPrincipal, 0);
     }
 
-    function test_deposit_failedRouting_clears_router_allowance() public {
+    function test_deposit_failedRouting_keeps_persistent_router_allowance() public {
         bytes32 tid = _tid("thr-allowance-reset");
         uint64 t0 = 3_050_000;
         vm.prank(admin);
@@ -339,7 +339,7 @@ contract MarketEngineYieldRoutingTest is MarketEngineBase {
         vm.clearMockedCalls();
         vm.stopPrank();
 
-        assertEq(token.allowance(address(engine), address(router)), 0);
+        assertEq(token.allowance(address(engine), address(router)), type(uint256).max);
     }
 
     function test_resolve_skipsWithdraw_whenNoRoutedPrincipal() public {

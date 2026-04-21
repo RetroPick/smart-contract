@@ -79,6 +79,20 @@ contract MockYieldRouterReentrant is IYieldRouterV2 {
         return depositScaledReturn;
     }
 
+    function depositDetailed(bytes32 templateId, uint256 amount)
+        external
+        override
+        onlyEngine
+        returns (uint256 principalAdded, uint256 attributionUnitsAdded)
+    {
+        if (reenterOnDepositScaled) {
+            reenterOnDepositScaled = false;
+            IMarketEngine(ENGINE)
+                .depositToSideFor(reenterBeneficiary, templateId, reenterEpochId, reenterOutcome, reenterAmount);
+        }
+        return (amount, depositScaledReturn);
+    }
+
     function withdrawScaled(bytes32 templateId, uint256) external override onlyEngine returns (uint256) {
         if (reenterOnWithdrawScaled) {
             reenterOnWithdrawScaled = false;
@@ -88,7 +102,39 @@ contract MockYieldRouterReentrant is IYieldRouterV2 {
         return 0;
     }
 
+    function withdrawDetailed(bytes32 templateId, uint256 principalAmount)
+        external
+        override
+        onlyEngine
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+    {
+        if (reenterOnWithdrawScaled) {
+            reenterOnWithdrawScaled = false;
+            IMarketEngine(ENGINE)
+                .depositToSideFor(reenterBeneficiary, templateId, reenterEpochId, reenterOutcome, reenterAmount);
+        }
+        return (0, principalAmount, principalAmount);
+    }
+
+    function withdrawAttribution(bytes32 templateId, uint256 attributionUnits)
+        external
+        override
+        onlyEngine
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+    {
+        if (reenterOnWithdrawScaled) {
+            reenterOnWithdrawScaled = false;
+            IMarketEngine(ENGINE)
+                .depositToSideFor(reenterBeneficiary, templateId, reenterEpochId, reenterOutcome, reenterAmount);
+        }
+        return (0, attributionUnits, attributionUnits);
+    }
+
     function currentValueOf(bytes32) external pure override returns (uint256) {
+        return 0;
+    }
+
+    function previewValueByAttribution(bytes32, uint256) external pure override returns (uint256) {
         return 0;
     }
 

@@ -8,6 +8,7 @@ import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/Reentrancy
 import {MarketTypes} from "../../types/MarketTypes.sol";
 import {MarketMath} from "../../math/MarketMath.sol";
 import {IYieldRouterV2} from "../../interfaces/IYieldRouterV2.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @notice User operations and claims module extracted from monolithic MarketEngine.
 /// @dev Runs via delegatecall from `MarketEngineDispatcher`. External entrypoints use `nonReentrant` so yield-router
@@ -81,6 +82,10 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
 
         pos.stakes[fromOutcome] -= grossAmount;
         pos.stakes[toOutcome] += netAmount;
+        if (pos.stakes[fromOutcome] == 0) {
+            pos.occupiedMask &= ~uint8(1 << fromOutcome);
+        }
+        pos.occupiedMask |= uint8(1 << toOutcome);
         pos.totalStake -= feeAmount;
         pos.switchFeesPaid += feeAmount;
 
@@ -149,10 +154,7 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
         uint64 nowTs = uint64(block.timestamp);
         if (!e.isEpochOpen(nowTs)) revert BettingClosed();
 
-        uint256 balBefore = stakeToken.balanceOf(address(this));
         stakeToken.safeTransferFrom(payer, address(this), amount);
-        uint256 received = stakeToken.balanceOf(address(this)) - balBefore;
-        if (received != amount) revert NonStandardStakeToken();
 
         bytes32 pk = positionKey(templateId, epochId);
         MarketTypes.Position storage pos = _positions[pk][beneficiary];
@@ -169,6 +171,7 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
         }
 
         pos.stakes[outcomeIndex] += amount;
+        pos.occupiedMask |= uint8(1 << outcomeIndex);
         pos.totalStake += amount;
         e.outcomePools[outcomeIndex] += amount;
         e.totalPool += amount;
@@ -182,7 +185,6 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
                 if (yieldRouterDisabled) {
                     emit YieldRouterDepositFailed(templateId, routeAmount);
                 } else {
-                    stakeToken.forceApprove(address(r), routeAmount);
                     try r.depositScaled(templateId, routeAmount) returns (uint256 attributionUnits) {
                         if (attributionUnits > 0) {
                             _recordRoutedPrincipal(templateId, e, routeAmount);
@@ -193,7 +195,6 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
                     catch {
                         emit YieldRouterDepositFailed(templateId, routeAmount);
                     }
-                    stakeToken.forceApprove(address(r), 0);
                 }
             }
         }
@@ -211,10 +212,22 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
         MarketTypes.Position storage pos = _positions[pk][user];
         if (pos.claimed) revert AlreadyClaimed();
 
+        SettledClaimRouting storage bucket = _settledClaimRouting[templateId][epochId];
+        if (bucket.enabled) {
+            amount = _claimOneRoutedSettled(templateId, epochId, user, e, pos, bucket);
+            if (amount == 0) revert NothingToClaim();
+            return amount;
+        }
+
         uint256 winningStake;
         if (e.refundMode) {
             amount = MarketMath.computeRefundTotal(pos.totalStake);
             winningStake = 0;
+        } else if (_isSingleOutcomePosition(pos)) {
+            uint8 outcomeIndex = _singleOutcomeIndex(pos.occupiedMask);
+            uint256 remainingClaims = e.claimLiabilityTotal - e.claimedTotal;
+            (amount, winningStake) =
+                MarketMath.computeSingleOutcomeClaimPayoutStorage(e, outcomeIndex, pos.totalStake, remainingClaims);
         } else {
             uint256[8] memory stakes = pos.stakes;
             uint256 remainingClaims = e.claimLiabilityTotal - e.claimedTotal;
@@ -242,10 +255,20 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
         MarketTypes.Position storage pos = _positions[pk][user];
         if (pos.claimed) return 0;
 
+        SettledClaimRouting storage bucket = _settledClaimRouting[templateId][epochId];
+        if (bucket.enabled) {
+            return _claimOneRoutedSettled(templateId, epochId, user, e, pos, bucket);
+        }
+
         uint256 winningStake;
         if (e.refundMode) {
             amount = MarketMath.computeRefundTotal(pos.totalStake);
             winningStake = 0;
+        } else if (_isSingleOutcomePosition(pos)) {
+            uint8 outcomeIndex = _singleOutcomeIndex(pos.occupiedMask);
+            uint256 remainingClaims = e.claimLiabilityTotal - e.claimedTotal;
+            (amount, winningStake) =
+                MarketMath.computeSingleOutcomeClaimPayoutStorage(e, outcomeIndex, pos.totalStake, remainingClaims);
         } else {
             uint256[8] memory stakes = pos.stakes;
             uint256 remainingClaims = e.claimLiabilityTotal - e.claimedTotal;
@@ -262,6 +285,105 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
         _vaults[templateId].claims -= amount;
     }
 
+    function _claimOneRoutedSettled(
+        bytes32 templateId,
+        uint64 epochId,
+        address user,
+        MarketTypes.Epoch storage e,
+        MarketTypes.Position storage pos,
+        SettledClaimRouting storage bucket
+    ) internal returns (uint256 amount) {
+        if (globalPaused) revert ProtocolPaused();
+        _requireNoUnreconciledRecovery(templateId);
+
+        (uint256 baseEntitlement, uint256 winningStake) = _computeRoutedSettledBaseEntitlement(e, pos, bucket);
+        if (baseEntitlement == 0 || bucket.baseOutstanding == 0 || bucket.attributionOutstanding == 0) return 0;
+
+        IYieldRouterV2 r = yieldRouter;
+        uint256 attributionToWithdraw = bucket.baseOutstanding == baseEntitlement
+            ? bucket.attributionOutstanding
+            : Math.mulDiv(bucket.attributionOutstanding, baseEntitlement, bucket.baseOutstanding, Math.Rounding.Floor);
+        if (attributionToWithdraw == 0) return 0;
+
+        uint256 principalConsumed;
+        uint256 attributionBurned;
+        (amount, principalConsumed, attributionBurned) = r.withdrawAttribution(templateId, attributionToWithdraw);
+        if (amount == 0 || attributionBurned == 0) return 0;
+        _finalizeRoutedSettledClaim(
+            templateId,
+            epochId,
+            user,
+            e,
+            pos,
+            bucket,
+            baseEntitlement,
+            winningStake,
+            amount,
+            principalConsumed,
+            attributionBurned
+        );
+    }
+
+    function _computeRoutedSettledBaseEntitlement(
+        MarketTypes.Epoch storage e,
+        MarketTypes.Position storage pos,
+        SettledClaimRouting storage bucket
+    ) internal view returns (uint256 baseEntitlement, uint256 winningStake) {
+        if (bucket.refundMode) {
+            return (MarketMath.computeRefundTotal(pos.totalStake), 0);
+        }
+        if (_isSingleOutcomePosition(pos)) {
+            return MarketMath.computeTotalUserEntitlementResolvedSingleSidedStorage(
+                e, _singleOutcomeIndex(pos.occupiedMask), pos.totalStake
+            );
+        }
+        uint256[8] memory stakes = pos.stakes;
+        return MarketMath.computeTotalUserEntitlementResolvedStorage(e, stakes);
+    }
+
+    function _finalizeRoutedSettledClaim(
+        bytes32 templateId,
+        uint64 epochId,
+        address user,
+        MarketTypes.Epoch storage e,
+        MarketTypes.Position storage pos,
+        SettledClaimRouting storage bucket,
+        uint256 baseEntitlement,
+        uint256 winningStake,
+        uint256 amount,
+        uint256 principalConsumed,
+        uint256 attributionBurned
+    ) internal {
+        pos.claimedAmount = amount;
+        pos.claimed = true;
+        e.claimedTotal += baseEntitlement;
+        if (!bucket.refundMode) e.remainingWinningStake -= winningStake;
+
+        bucket.baseOutstanding -= baseEntitlement;
+        if (principalConsumed > bucket.principalOutstanding) {
+            bucket.principalOutstanding = 0;
+        } else {
+            bucket.principalOutstanding -= principalConsumed;
+        }
+        if (attributionBurned > bucket.attributionOutstanding) {
+            bucket.attributionOutstanding = 0;
+        } else {
+            bucket.attributionOutstanding -= attributionBurned;
+        }
+        totalRoutedPrincipal -= principalConsumed;
+        _templateSettledClaimsRoutedPrincipal[templateId] -= principalConsumed;
+        if (bucket.baseOutstanding == 0 || bucket.attributionOutstanding == 0) {
+            bucket.enabled = false;
+            bucket.principalOutstanding = 0;
+            bucket.attributionOutstanding = 0;
+            bucket.baseOutstanding = 0;
+            emit EpochSettledClaimsRoutingDisabled(templateId, epochId);
+        }
+        emit EpochSettledClaimPaid(
+            templateId, epochId, user, baseEntitlement, amount, principalConsumed, attributionBurned
+        );
+    }
+
     function _requireActiveEpoch(MarketTypes.Ledger storage ledger, uint64 epochId) internal view {
         if (epochId != ledger.activeEpochId) revert EpochNotActive();
     }
@@ -269,26 +391,36 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
     function _canDepositToOutcome(
         MarketTypes.Position storage pos,
         uint8 outcomeIndex,
-        uint8 outcomeCount,
+        uint8,
         bool allowMultiSide
     ) internal view returns (bool) {
         if (allowMultiSide) return true;
         if (pos.totalStake == 0) return true;
-        for (uint256 i = 0; i < outcomeCount; i++) {
-            if (i != outcomeIndex && pos.stakes[i] != 0) return false;
-        }
-        return true;
+        return (pos.occupiedMask & ~uint8(1 << outcomeIndex)) == 0;
     }
 
-    function _isSingleSidedOn(MarketTypes.Position storage pos, uint8 outcomeIndex, uint8 outcomeCount)
+    function _isSingleSidedOn(MarketTypes.Position storage pos, uint8 outcomeIndex, uint8)
         internal
         view
         returns (bool)
     {
-        for (uint256 i = 0; i < outcomeCount; i++) {
-            if (i != outcomeIndex && pos.stakes[i] != 0) return false;
+        uint8 mask = pos.occupiedMask;
+        if ((mask & uint8(1 << outcomeIndex)) == 0) return false;
+        return (mask & ~uint8(1 << outcomeIndex)) == 0;
+    }
+
+    function _isSingleOutcomePosition(MarketTypes.Position storage pos) internal view returns (bool) {
+        uint8 mask = pos.occupiedMask;
+        return mask != 0 && (mask & (mask - 1)) == 0;
+    }
+
+    function _singleOutcomeIndex(uint8 mask) internal pure returns (uint8 idx) {
+        while ((mask & 1) == 0) {
+            unchecked {
+                ++idx;
+            }
+            mask >>= 1;
         }
-        return true;
     }
 
     function _withdrawSwitchFeePrincipal(

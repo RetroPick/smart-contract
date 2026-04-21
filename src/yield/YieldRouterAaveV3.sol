@@ -166,6 +166,18 @@ contract YieldRouterAaveV3 is IYieldRouter, IYieldRouterV2, Ownable2Step {
         return sharesByTemplate[templateId] - sharesBefore;
     }
 
+    function depositDetailed(bytes32 templateId, uint256 amount)
+        external
+        override
+        onlyEngine
+        returns (uint256 principalAdded, uint256 attributionUnitsAdded)
+    {
+        uint256 sharesBefore = sharesByTemplate[templateId];
+        _deposit(templateId, amount);
+        principalAdded = amount;
+        attributionUnitsAdded = sharesByTemplate[templateId] - sharesBefore;
+    }
+
     function withdrawScaled(bytes32 templateId, uint256 principalAmount)
         external
         override
@@ -175,9 +187,55 @@ contract YieldRouterAaveV3 is IYieldRouter, IYieldRouterV2, Ownable2Step {
         return _withdraw(templateId, principalAmount);
     }
 
+    function withdrawDetailed(bytes32 templateId, uint256 principalAmount)
+        external
+        override
+        onlyEngine
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+    {
+        uint256 sharesBefore = sharesByTemplate[templateId];
+        grossAmount = _withdraw(templateId, principalAmount);
+        attributionUnitsBurned = sharesBefore - sharesByTemplate[templateId];
+        principalConsumed = principalAmount;
+    }
+
+    function withdrawAttribution(bytes32 templateId, uint256 attributionUnits)
+        external
+        override
+        onlyEngine
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+    {
+        if (attributionUnits == 0) revert ZeroAmount();
+
+        uint256 templateShares = sharesByTemplate[templateId];
+        if (attributionUnits > templateShares) revert OverWithdraw();
+        uint256 templatePrincipal = principalByTemplate[templateId];
+        uint256 principalAmount = attributionUnits == templateShares
+            ? templatePrincipal
+            : Math.mulDiv(templatePrincipal, attributionUnits, templateShares, Math.Rounding.Floor);
+
+        uint256 scaledBefore = IScaledBalanceToken(address(A_TOKEN)).scaledBalanceOf(address(this));
+        grossAmount = _withdraw(templateId, principalAmount);
+        uint256 scaledAfter = IScaledBalanceToken(address(A_TOKEN)).scaledBalanceOf(address(this));
+        attributionUnitsBurned = scaledBefore - scaledAfter;
+        principalConsumed = principalAmount;
+    }
+
     /// @dev Lower-bound view: tracked principal (excludes unmodeled aToken rebase in this legacy router).
     function currentValueOf(bytes32 templateId) external view override returns (uint256) {
         return principalByTemplate[templateId];
+    }
+
+    function previewValueByAttribution(bytes32, uint256 attributionUnits)
+        external
+        view
+        override
+        returns (uint256 currentValue)
+    {
+        if (attributionUnits == 0) return 0;
+        uint256 totalScaled = IScaledBalanceToken(address(A_TOKEN)).scaledBalanceOf(address(this));
+        if (totalScaled == 0) return 0;
+        return Math.mulDiv(A_TOKEN.balanceOf(address(this)), attributionUnits, totalScaled, Math.Rounding.Floor);
     }
 
     /// @dev No-op LM path; stricter `view` than `IYieldRouterV2` is valid (see `YieldRouterV2` for mutating claim).
@@ -229,4 +287,3 @@ contract YieldRouterAaveV3 is IYieldRouter, IYieldRouterV2, Ownable2Step {
         return 0;
     }
 }
-

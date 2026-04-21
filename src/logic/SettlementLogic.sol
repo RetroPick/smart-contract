@@ -98,6 +98,7 @@ library SettlementLogic {
         for (uint256 i = 0; i < e.outcomeCount; i++) {
             if (((outputs.winningMask >> i) & 1) != 0) winningPool += e.outcomePools[i];
         }
+        e.winningPoolTotal = winningPool;
         if (e.marketType == MarketTypes.MarketType.Ladder) {
             uint8 winnerIdx = 0;
             for (uint8 i = 0; i < e.outcomeCount; i++) {

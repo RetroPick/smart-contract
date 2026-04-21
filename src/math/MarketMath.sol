@@ -106,7 +106,7 @@ library MarketMath {
         pure
         returns (uint256 claimLiabilityTotal, uint256 settlementFee, uint256 distributableLosingPool)
     {
-        uint256 wp = epoch.winningPoolTotal();
+        uint256 wp = MarketTypes.totalWinningPool(epoch);
         return computeClaimLiabilityComponents(epoch.totalPool, wp, feeBps, feeOnLosingPool);
     }
 
@@ -192,10 +192,36 @@ library MarketMath {
     ) internal pure returns (uint256) {
         uint256 userWinning = totalWinningStake(epoch.winningOutcomeMask, epoch.outcomeCount, stakes);
         if (userWinning == 0) return 0;
-        uint256 winningPool = epoch.winningPoolTotal();
+        uint256 winningPool = MarketTypes.totalWinningPool(epoch);
         uint256 distributableLosing = _distributableLosingPoolForClaims(epoch, winningPool, settlementFeeBps, feeOnLosingPool);
         uint256 proRata = (userWinning * distributableLosing) / winningPool;
         return userWinning + proRata;
+    }
+
+    function computeTotalUserEntitlementResolvedStorage(MarketTypes.Epoch storage epoch, uint256[8] memory stakes)
+        internal
+        view
+        returns (uint256 entitlement, uint256 userWinningStake_)
+    {
+        userWinningStake_ = totalWinningStake(epoch.winningOutcomeMask, epoch.outcomeCount, stakes);
+        if (userWinningStake_ == 0) return (0, 0);
+
+        uint256 winningPool = epoch.winningPoolTotal;
+        uint256 distributableLosing = _distributableLosingPoolForClaimsStorage(epoch, winningPool);
+        entitlement = userWinningStake_ + (userWinningStake_ * distributableLosing) / winningPool;
+    }
+
+    function computeTotalUserEntitlementResolvedSingleSidedStorage(
+        MarketTypes.Epoch storage epoch,
+        uint8 outcomeIndex,
+        uint256 stakeAmount
+    ) internal view returns (uint256 entitlement, uint256 userWinningStake_) {
+        if (((epoch.winningOutcomeMask >> outcomeIndex) & 1) == 0) return (0, 0);
+
+        userWinningStake_ = stakeAmount;
+        uint256 winningPool = epoch.winningPoolTotal;
+        uint256 distributableLosing = _distributableLosingPoolForClaimsStorage(epoch, winningPool);
+        entitlement = userWinningStake_ + (userWinningStake_ * distributableLosing) / winningPool;
     }
 
     /// @notice Compute claim payout for a user position (memory epoch).
@@ -235,12 +261,28 @@ library MarketMath {
         userWinningStake_ = totalWinningStake(winningMask, outcomeCount, stakes);
         if (userWinningStake_ == 0) return (0, 0);
 
-        uint256 winningPool = 0;
-        for (uint256 i = 0; i < outcomeCount; i++) {
-            if ((winningMask >> i) & 1 == 1) {
-                winningPool += epoch.outcomePools[i];
-            }
+        uint256 winningPool = epoch.winningPoolTotal;
+        uint256 distributableLosing = _distributableLosingPoolForClaimsStorage(epoch, winningPool);
+        uint256 entitlement = userWinningStake_ + (userWinningStake_ * distributableLosing) / winningPool;
+
+        if (epoch.remainingWinningStake == userWinningStake_) {
+            payout = remainingClaimsForEpoch;
+        } else {
+            payout = entitlement;
         }
+        return (payout, userWinningStake_);
+    }
+
+    function computeSingleOutcomeClaimPayoutStorage(
+        MarketTypes.Epoch storage epoch,
+        uint8 outcomeIndex,
+        uint256 stakeAmount,
+        uint256 remainingClaimsForEpoch
+    ) internal view returns (uint256 payout, uint256 userWinningStake_) {
+        if (((epoch.winningOutcomeMask >> outcomeIndex) & 1) == 0) return (0, 0);
+
+        userWinningStake_ = stakeAmount;
+        uint256 winningPool = epoch.winningPoolTotal;
         uint256 distributableLosing = _distributableLosingPoolForClaimsStorage(epoch, winningPool);
         uint256 entitlement = userWinningStake_ + (userWinningStake_ * distributableLosing) / winningPool;
 

@@ -2,6 +2,7 @@
 pragma solidity 0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {MarketTypes} from "../types/MarketTypes.sol";
 import {IPriceOracle} from "../interfaces/IPriceOracle.sol";
 import {IYieldRouterV2} from "../interfaces/IYieldRouterV2.sol";
@@ -19,6 +20,8 @@ import {SettlementLogic} from "../logic/SettlementLogic.sol";
 /// still assume ERC20 semantics for Aave/4626 integration.
 // slither-disable-start uninitialized-state -- UUPS: dispatcher `initialize` sets primitives; mappings start empty
 abstract contract MarketEngineState {
+    using SafeERC20 for IERC20;
+
     bytes32 internal constant MODULE_STORAGE_COMPATIBILITY_ID = keccak256("retropick.marketengine.state.v1");
     uint256 public constant MAX_BATCH_SIZE = 100;
     uint256 internal constant MAX_USER_EPOCHS_PAGE_SIZE = 256;
@@ -75,6 +78,16 @@ abstract contract MarketEngineState {
     uint256 public totalUnreconciledRecovered;
     uint8 internal constant MAX_YIELD_ROUTER_FAILURES = 3;
     uint16 internal constant YIELD_BUFFER_BPS = 500;
+
+    struct SettledClaimRouting {
+        uint256 principalOutstanding;
+        uint256 baseOutstanding;
+        uint256 attributionOutstanding;
+        bool enabled;
+        bool refundMode;
+    }
+    mapping(bytes32 templateId => mapping(uint64 epochId => SettledClaimRouting)) internal _settledClaimRouting;
+    mapping(bytes32 templateId => uint256 outstandingSettledClaimsPrincipal) internal _templateSettledClaimsRoutedPrincipal;
 
     // --- dispatcher state (appended after legacy state) ---
     mapping(bytes4 selector => address module) internal selectorToModule;
@@ -235,6 +248,26 @@ abstract contract MarketEngineState {
     event EmergencyRecoveredBalanceReassigned(
         bytes32 indexed fromTemplateId, bytes32 indexed toTemplateId, uint256 amount
     );
+    event EpochSettledClaimsRouted(
+        bytes32 indexed templateId,
+        uint64 indexed epochId,
+        uint256 baseAmount,
+        uint256 principalAmount,
+        uint256 attributionUnits
+    );
+    event EpochSettledClaimPaid(
+        bytes32 indexed templateId,
+        uint64 indexed epochId,
+        address indexed user,
+        uint256 baseEntitlement,
+        uint256 payoutAmount,
+        uint256 principalConsumed,
+        uint256 attributionUnitsBurned
+    );
+    event EpochSettledClaimsRoutingDisabled(bytes32 indexed templateId, uint64 indexed epochId);
+    event EpochSettledClaimsRecovered(
+        bytes32 indexed templateId, uint64 indexed epochId, uint256 recoveredPrincipal, uint256 recoveredAmount
+    );
     event ModuleRegistered(address indexed module, bytes32 indexed codeHash);
     event ModuleCodeHashAllowed(bytes32 indexed codeHash);
     event ModuleCodeHashDisallowed(bytes32 indexed codeHash);
@@ -323,6 +356,61 @@ abstract contract MarketEngineState {
         _epochOracleAdapters[templateId][epochId] = address(_resolveOracleByClass(oracleClass));
     }
 
+    function _snapshotEpochTemplateMarketConfig(MarketTypes.Epoch storage e, MarketTypes.Template storage t) internal {
+        if (t.templateOracleKind != MarketTypes.OracleKind.Chainlink) {
+            e.templateOracleKind = t.templateOracleKind;
+            e.eventOracle = t.eventOracle;
+        }
+        if (t.oracleClass != MarketTypes.OracleClass.CHAINLINK_PRICE) {
+            e.oracleClass = t.oracleClass;
+        }
+        if (t.templateOracleKind == MarketTypes.OracleKind.Chainlink) {
+            e.oracleFeedId = t.oracleFeedId;
+        }
+
+        MarketTypes.MarketType marketType = t.marketType;
+        if (marketType == MarketTypes.MarketType.Threshold) {
+            e.absoluteThresholdValueE8 = t.absoluteThresholdValueE8;
+            if (t.anchorPriceE8 != 0) e.anchorPriceE8 = t.anchorPriceE8;
+            return;
+        }
+        if (marketType == MarketTypes.MarketType.RangeClose) {
+            e.rangeBoundsE8 = t.rangeBoundsE8;
+            return;
+        }
+        if (marketType == MarketTypes.MarketType.Velocity) {
+            e.velocityBoundsE4 = t.velocityBoundsE4;
+            return;
+        }
+        if (marketType == MarketTypes.MarketType.Ladder) {
+            e.ladderBoundsE8 = t.ladderBoundsE8;
+            e.ladderPayoutWeightsBps = t.ladderPayoutWeightsBps;
+            return;
+        }
+        if (marketType == MarketTypes.MarketType.Convergence) {
+            e.oracleFeedIdB = t.oracleFeedIdB;
+            e.spreadToleranceBps = t.spreadToleranceBps;
+            return;
+        }
+        if (marketType == MarketTypes.MarketType.Composite) {
+            e.absoluteThresholdValueE8 = t.absoluteThresholdValueE8;
+            e.compositeFeedIds = t.compositeFeedIds;
+            e.compositeConditions = t.compositeConditions;
+            e.compositeFeedCount = t.compositeFeedCount;
+            e.compositeLogic = t.compositeLogic;
+            e.compositeAbsoluteThresholdsE8 = t.compositeAbsoluteThresholdsE8;
+            return;
+        }
+        if (marketType == MarketTypes.MarketType.Corridor) {
+            e.rangeBoundsE8 = t.rangeBoundsE8;
+            return;
+        }
+        if (marketType == MarketTypes.MarketType.Cascade) {
+            e.rangeBoundsE8 = t.rangeBoundsE8;
+            if (t.cascadeDownward) e.cascadeDownward = true;
+        }
+    }
+
     function _resolveEpochOracle(bytes32 templateId, uint64 epochId, MarketTypes.OracleClass oracleClass)
         internal
         view
@@ -389,14 +477,10 @@ abstract contract MarketEngineState {
         MarketTypes.Epoch storage e = _epochs[templateId][epochId];
         if (refundMode) {
             e.remainingWinningStake = 0;
+            e.winningPoolTotal = 0;
             return;
         }
-        uint256 sum = 0;
-        uint8 n = e.outcomeCount;
-        for (uint256 i = 0; i < uint256(n); i++) {
-            if (((e.winningOutcomeMask >> i) & 1) != 0) sum += e.outcomePools[i];
-        }
-        e.remainingWinningStake = sum;
+        e.remainingWinningStake = e.winningPoolTotal;
     }
 
     /// @dev Uses `stakeToken` balance delta after `withdrawScaled`; do not trust the router return value for accounting.
@@ -414,9 +498,65 @@ abstract contract MarketEngineState {
         if (received < principalAmount) revert YieldRouterShortfall(principalAmount, received);
     }
 
+    function _tryRouteSettledClaimsAfterSettlement(
+        bytes32 templateId,
+        uint64 epochId,
+        MarketTypes.Ledger storage ledger,
+        MarketTypes.Epoch storage e
+    ) internal {
+        uint256 baseAmount = _settledClaimBaseLiability(e);
+        if (baseAmount == 0 || e.refundMode) return;
+
+        IYieldRouterV2 r = yieldRouter;
+        if (address(r) == address(0) || yieldRouterDisabled) return;
+
+        uint256 balanceBefore = stakeToken.balanceOf(address(this));
+        try r.depositDetailed(templateId, baseAmount) returns (uint256 principalAdded, uint256 attributionUnitsAdded) {
+            uint256 balanceAfter = stakeToken.balanceOf(address(this));
+            if (balanceAfter > balanceBefore) revert YieldRouterBalanceInvariant();
+            uint256 moved = balanceBefore - balanceAfter;
+            if (moved == 0) {
+                return;
+            }
+            if (moved != baseAmount || principalAdded != baseAmount || attributionUnitsAdded == 0) {
+                revert YieldRouterBalanceInvariant();
+            }
+            if (principalAdded == 0 || attributionUnitsAdded == 0) {
+                return;
+            }
+            _vaults[templateId].claims -= baseAmount;
+            ledger.claimsReserveTotal -= baseAmount;
+
+            SettledClaimRouting storage bucket = _settledClaimRouting[templateId][epochId];
+            bucket.enabled = true;
+            bucket.refundMode = e.refundMode;
+            bucket.baseOutstanding = baseAmount;
+            bucket.principalOutstanding = principalAdded;
+            bucket.attributionOutstanding = attributionUnitsAdded;
+
+            totalRoutedPrincipal += principalAdded;
+            _templateSettledClaimsRoutedPrincipal[templateId] += principalAdded;
+
+            emit EpochSettledClaimsRouted(templateId, epochId, baseAmount, principalAdded, attributionUnitsAdded);
+        } catch {}
+    }
+
+    function _syncYieldRouterApproval(address oldRouter, address newRouter) internal {
+        if (oldRouter != address(0)) {
+            stakeToken.forceApprove(oldRouter, 0);
+        }
+        if (newRouter != address(0)) {
+            stakeToken.forceApprove(newRouter, type(uint256).max);
+        }
+    }
+
     function _requireNoUnreconciledRecovery(bytes32 templateId) internal view {
         uint256 pendingAmount = _unreconciledRecoveredByTemplate[templateId];
         if (pendingAmount != 0) revert UnreconciledRecoveryPending(templateId, pendingAmount);
+    }
+
+    function _settledClaimBaseLiability(MarketTypes.Epoch storage e) internal view returns (uint256) {
+        return e.refundMode ? e.totalRefundLiability : e.claimLiabilityTotal;
     }
 }
 // slither-disable-end uninitialized-state

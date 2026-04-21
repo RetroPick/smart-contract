@@ -2,11 +2,11 @@
 pragma solidity 0.8.24;
 
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
-import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import {MarketTypes} from "../types/MarketTypes.sol";
 import {IMarketEngine} from "./IMarketEngine.sol";
-import {MarketEngineState} from "./MarketEngineState.sol";
+import {MarketEngineAdminModule} from "./modules/MarketEngineAdminModule.sol";
+import {MarketEngineUserOpsClaimsModule} from "./modules/MarketEngineUserOpsClaimsModule.sol";
 
 /// @notice UUPS root dispatcher for MarketEngine modular architecture.
 /// @dev Routes calls by selector to trusted module contracts via delegatecall.
@@ -15,7 +15,12 @@ import {MarketEngineState} from "./MarketEngineState.sol";
 /// Module onboarding is two-step: `allowModuleCodeHash` commits to an exact bytecode artifact, then `registerModule`
 /// pins a live address to that hash. The storage-compatibility marker is auxiliary; layout safety requires modules
 /// to inherit `MarketEngineState` (or an audited equivalent) and off-chain verification.
-contract MarketEngineDispatcher is Initializable, ReentrancyGuardTransient, UUPSUpgradeable, MarketEngineState {
+contract MarketEngineDispatcher is
+    Initializable,
+    UUPSUpgradeable,
+    MarketEngineAdminModule,
+    MarketEngineUserOpsClaimsModule
+{
     bytes4 private constant SELECTOR_INITIALIZE = 0x7b89ffdb;
     bytes4 private constant SELECTOR_UPGRADE_TO_AND_CALL = 0x4f1ef286;
     bytes4 private constant SELECTOR_PROXIABLE_UUID = 0x52d1902d;

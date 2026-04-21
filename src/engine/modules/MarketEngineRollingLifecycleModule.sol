@@ -164,6 +164,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         e.settlementFeeTotal = 0;
         e.winningOutcomeMask = 0;
         e.remainingWinningStake = 0;
+        e.winningPoolTotal = 0;
         e.cancelReason = reason;
         e.refundMode = true;
         e.claimable = true;
@@ -172,6 +173,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         if (epochId > ledger.lastResolvedEpochId) {
             ledger.lastResolvedEpochId = epochId;
         }
+        _tryRouteSettledClaimsAfterSettlement(templateId, epochId, ledger, e);
         emit EpochCancelled(templateId, epochId, uint8(reason));
     }
 
@@ -265,24 +267,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         e.createdAt = nowTs;
         e.oracleMaxDelaySeconds = t.oracleMaxDelaySeconds;
         e.oracleMaxConfidenceBps = t.oracleMaxConfidenceBps;
-        e.oracleFeedId = t.oracleFeedId;
-        e.absoluteThresholdValueE8 = t.absoluteThresholdValueE8;
-        e.rangeBoundsE8 = t.rangeBoundsE8;
-        e.templateOracleKind = t.templateOracleKind;
-        e.oracleClass = t.oracleClass;
-        e.eventOracle = t.eventOracle;
-        e.cascadeDownward = t.cascadeDownward;
-        e.anchorPriceE8 = t.anchorPriceE8;
-        e.velocityBoundsE4 = t.velocityBoundsE4;
-        e.ladderBoundsE8 = t.ladderBoundsE8;
-        e.ladderPayoutWeightsBps = t.ladderPayoutWeightsBps;
-        e.oracleFeedIdB = t.oracleFeedIdB;
-        e.spreadToleranceBps = t.spreadToleranceBps;
-        e.compositeFeedIds = t.compositeFeedIds;
-        e.compositeConditions = t.compositeConditions;
-        e.compositeFeedCount = t.compositeFeedCount;
-        e.compositeLogic = t.compositeLogic;
-        e.compositeAbsoluteThresholdsE8 = t.compositeAbsoluteThresholdsE8;
+        _snapshotEpochTemplateMarketConfig(e, t);
         _snapshotEpochOracleAdapter(templateId, epochId, t.templateOracleKind, t.oracleClass);
         _epochYieldFeeBps[templateId][epochId] = yieldFeeBps;
 
@@ -480,6 +465,7 @@ contract MarketEngineRollingLifecycleModule is MarketEngineState, ReentrancyGuar
         _applyResolveAccounting(templateId, epochId, ledger, e, outputs, nowTs);
         _emitResolveEvents(templateId, epochId, outputs, oracleRoundId);
         _finalizeYieldAccounting(templateId, epochId, ledger, grossYield, yieldFee, netYield, outputs.refundMode);
+        _tryRouteSettledClaimsAfterSettlement(templateId, epochId, ledger, e);
     }
 
     function _withdrawResolvePrincipal(bytes32 templateId, uint64 epochId, bool rollingLink)

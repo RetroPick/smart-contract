@@ -492,6 +492,9 @@ contract MarketEngineUXIntegrationsTest is Test {
         dispatcher.setSelectorModule(bytes4(keccak256("setLmRewardsEnabled(bool)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("keeperClaimLmRewards(bytes32)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("yieldEmergencyWithdraw(bytes32)")), adminModule, false);
+        dispatcher.setSelectorModule(
+            bytes4(keccak256("recoverRoutedSettledClaims(bytes32,uint64,uint256)")), adminModule, false
+        );
         dispatcher.setSelectorModule(bytes4(keccak256("initializeMarket(bytes32)")), adminModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("withdrawFees(bytes32,uint256)")), adminModule, false);
 
@@ -501,6 +504,16 @@ contract MarketEngineUXIntegrationsTest is Test {
         dispatcher.setSelectorModule(bytes4(keccak256("getVaultBalances(bytes32)")), viewModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("getRollingLifecycle(bytes32)")), viewModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("getEpoch(bytes32,uint64)")), viewModule, false);
+        dispatcher.setSelectorModule(bytes4(keccak256("getMarketView(bytes32)")), viewModule, false);
+        dispatcher.setSelectorModule(bytes4(keccak256("getEpochView(bytes32,uint64)")), viewModule, false);
+        dispatcher.setSelectorModule(bytes4(keccak256("getActiveEpochView(bytes32)")), viewModule, false);
+        dispatcher.setSelectorModule(bytes4(keccak256("getOutcomeViews(bytes32,uint64)")), viewModule, false);
+        dispatcher.setSelectorModule(
+            bytes4(keccak256("getPositionView(bytes32,uint64,address)")), viewModule, false
+        );
+        dispatcher.setSelectorModule(bytes4(keccak256("getTemplateYieldView(bytes32)")), viewModule, false);
+        dispatcher.setSelectorModule(bytes4(keccak256("getOperatorTemplateView(bytes32)")), viewModule, false);
+        dispatcher.setSelectorModule(bytes4(keccak256("getOperatorGlobalView()")), viewModule, false);
 
         dispatcher.setSelectorModule(
             bytes4(keccak256("depositToSide(bytes32,uint64,uint8,uint256)")), userOpsClaimsModule, false
@@ -550,4 +563,3 @@ contract MarketEngineUXIntegrationsTest is Test {
         );
     }
 }
-

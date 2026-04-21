@@ -144,6 +144,16 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
         return _depositScaled(templateId, amount);
     }
 
+    function depositDetailed(bytes32 templateId, uint256 amount)
+        external
+        override
+        onlyEngine
+        returns (uint256 principalAdded, uint256 attributionUnitsAdded)
+    {
+        attributionUnitsAdded = _depositScaled(templateId, amount);
+        principalAdded = amount;
+    }
+
     function withdrawScaled(bytes32 templateId, uint256 principalAmount)
         external
         override
@@ -151,6 +161,24 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
         returns (uint256 grossAmount)
     {
         return _withdrawScaled(templateId, principalAmount, false);
+    }
+
+    function withdrawDetailed(bytes32 templateId, uint256 principalAmount)
+        external
+        override
+        onlyEngine
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+    {
+        return _withdrawDetailedByPrincipal(templateId, principalAmount, false);
+    }
+
+    function withdrawAttribution(bytes32 templateId, uint256 attributionUnits)
+        external
+        override
+        onlyEngine
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+    {
+        return _withdrawDetailedByAttribution(templateId, attributionUnits, false);
     }
 
     // slither-disable-next-line reentrancy-no-eth -- `onlyEngine`; Aave/ERC-4626 do not reenter this contract; CEI would mis-account shares vs actual balances.
@@ -247,6 +275,22 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
         return t.scaledPrincipal.scaledToReal(idx);
     }
 
+    function previewValueByAttribution(bytes32 templateId, uint256 attributionUnits)
+        external
+        view
+        override
+        returns (uint256 currentValue)
+    {
+        if (attributionUnits == 0) return 0;
+        TemplateYield storage t = _templates[templateId];
+        if (t.path == IYieldRouterV2.YieldPath.StataToken) {
+            if (address(STATA_TOKEN) == address(0)) return 0;
+            return STATA_TOKEN.convertToAssets(attributionUnits);
+        }
+        uint256 idx = AAVE_POOL.getReserveNormalizedIncome(address(STAKE_TOKEN));
+        return attributionUnits.scaledToReal(idx);
+    }
+
     function claimLmRewards(bytes32 templateId)
         external
         override
@@ -309,6 +353,104 @@ contract YieldRouterV2 is IYieldRouterV2, Ownable2Step {
 
     function stataSharesOf(bytes32 templateId) external view override returns (uint256) {
         return _templates[templateId].stataShares;
+    }
+
+    function _withdrawDetailedByPrincipal(bytes32 templateId, uint256 principalAmount, bool emergency)
+        internal
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+    {
+        if (principalAmount == 0) revert ZeroAmount();
+        TemplateYield storage t = _templates[templateId];
+        uint256 p = t.principal;
+        if (principalAmount > p) revert OverWithdraw();
+
+        if (t.path == IYieldRouterV2.YieldPath.StataToken) {
+            if (address(STATA_TOKEN) == address(0)) revert StataNotConfigured();
+            if (!emergency) _requireReserveWithdrawable();
+            uint256 sharesTotal = t.stataShares;
+            if (sharesTotal == 0) revert OverWithdraw();
+            attributionUnitsBurned =
+                principalAmount == p ? sharesTotal : Math.mulDiv(sharesTotal, principalAmount, p, Math.Rounding.Floor);
+            if (attributionUnitsBurned > sharesTotal) attributionUnitsBurned = sharesTotal;
+            grossAmount = STATA_TOKEN.redeem(attributionUnitsBurned, ENGINE, address(this));
+            t.stataShares = sharesTotal - attributionUnitsBurned;
+            t.principal = p - principalAmount;
+            globalScaledBalance = IScaledBalanceToken(address(A_TOKEN)).scaledBalanceOf(address(this));
+            principalConsumed = principalAmount;
+            emit YieldWithdrawnStata(templateId, principalAmount, attributionUnitsBurned, grossAmount);
+            return (grossAmount, principalConsumed, attributionUnitsBurned);
+        }
+
+        if (!emergency) _requireReserveWithdrawable();
+        uint256 scaledTotal = t.scaledPrincipal;
+        if (scaledTotal == 0) revert OverWithdraw();
+        uint256 idx = AAVE_POOL.getReserveNormalizedIncome(address(STAKE_TOKEN));
+        uint256 underlyingToWithdraw = principalAmount == p
+            ? scaledTotal.scaledToReal(idx)
+            : YieldAccounting.proportionalUnderlying(scaledTotal, p, principalAmount, idx);
+
+        uint256 scaledBefore = IScaledBalanceToken(address(A_TOKEN)).scaledBalanceOf(address(this));
+        grossAmount = AAVE_POOL.withdraw(address(STAKE_TOKEN), underlyingToWithdraw, ENGINE);
+        uint256 scaledAfter = IScaledBalanceToken(address(A_TOKEN)).scaledBalanceOf(address(this));
+        attributionUnitsBurned = scaledBefore - scaledAfter;
+
+        if (principalAmount == p) {
+            t.scaledPrincipal = 0;
+        } else if (attributionUnitsBurned > t.scaledPrincipal) {
+            t.scaledPrincipal = 0;
+        } else {
+            t.scaledPrincipal -= attributionUnitsBurned;
+        }
+        globalScaledBalance = scaledAfter;
+        t.principal = p - principalAmount;
+        principalConsumed = principalAmount;
+        emit YieldWithdrawnScaled(templateId, principalAmount, attributionUnitsBurned, grossAmount, idx);
+    }
+
+    function _withdrawDetailedByAttribution(bytes32 templateId, uint256 attributionUnits, bool emergency)
+        internal
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+    {
+        if (attributionUnits == 0) revert ZeroAmount();
+        TemplateYield storage t = _templates[templateId];
+        uint256 p = t.principal;
+
+        if (t.path == IYieldRouterV2.YieldPath.StataToken) {
+            if (address(STATA_TOKEN) == address(0)) revert StataNotConfigured();
+            if (!emergency) _requireReserveWithdrawable();
+            uint256 sharesTotal = t.stataShares;
+            if (attributionUnits > sharesTotal) revert OverWithdraw();
+            attributionUnitsBurned = attributionUnits;
+            principalConsumed = attributionUnits == sharesTotal
+                ? p
+                : Math.mulDiv(p, attributionUnits, sharesTotal, Math.Rounding.Floor);
+            grossAmount = STATA_TOKEN.redeem(attributionUnitsBurned, ENGINE, address(this));
+            t.stataShares = sharesTotal - attributionUnitsBurned;
+            t.principal = p - principalConsumed;
+            globalScaledBalance = IScaledBalanceToken(address(A_TOKEN)).scaledBalanceOf(address(this));
+            emit YieldWithdrawnStata(templateId, principalConsumed, attributionUnitsBurned, grossAmount);
+            return (grossAmount, principalConsumed, attributionUnitsBurned);
+        }
+
+        if (!emergency) _requireReserveWithdrawable();
+        uint256 scaledTotal = t.scaledPrincipal;
+        if (attributionUnits > scaledTotal) revert OverWithdraw();
+        uint256 idx = AAVE_POOL.getReserveNormalizedIncome(address(STAKE_TOKEN));
+        uint256 underlyingToWithdraw = attributionUnits.scaledToReal(idx);
+
+        uint256 scaledBefore = IScaledBalanceToken(address(A_TOKEN)).scaledBalanceOf(address(this));
+        grossAmount = AAVE_POOL.withdraw(address(STAKE_TOKEN), underlyingToWithdraw, ENGINE);
+        uint256 scaledAfter = IScaledBalanceToken(address(A_TOKEN)).scaledBalanceOf(address(this));
+        attributionUnitsBurned = scaledBefore - scaledAfter;
+        if (attributionUnitsBurned > scaledTotal) attributionUnitsBurned = scaledTotal;
+        principalConsumed = attributionUnitsBurned == scaledTotal
+            ? p
+            : Math.mulDiv(p, attributionUnitsBurned, scaledTotal, Math.Rounding.Floor);
+
+        t.scaledPrincipal = scaledTotal - attributionUnitsBurned;
+        globalScaledBalance = scaledAfter;
+        t.principal = p - principalConsumed;
+        emit YieldWithdrawnScaled(templateId, principalConsumed, attributionUnitsBurned, grossAmount, idx);
     }
 
     // --- internals ---

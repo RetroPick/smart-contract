@@ -34,14 +34,38 @@ interface IYieldRouterV2 is IYieldRouter {
     /// @dev **MUST** be `onlyEngine` (or equivalent): not publicly callable.
     function depositScaled(bytes32 templateId, uint256 amount) external returns (uint256 attributionUnits);
 
+    /// @notice Detailed deposit surface for engine-side sub-bucket accounting.
+    /// @dev `principalAdded` is the stake-token principal moved into the router for the template.
+    ///      `attributionUnitsAdded` are router-native units: scaled aToken balance for AToken path,
+    ///      or ERC-4626 shares for Stata path.
+    function depositDetailed(bytes32 templateId, uint256 amount)
+        external
+        returns (uint256 principalAdded, uint256 attributionUnitsAdded);
+
     /// @notice Withdraw underlying for `templateId` against `principalAmount` of tracked principal (proportional slice).
     /// @dev **MUST** be `onlyEngine` (or equivalent): not publicly callable.
     /// @return grossAmount SHOULD equal underlying actually sent to the engine; callers SHOULD verify `stakeToken`
     ///         balance deltas instead of trusting a malicious return value alone.
     function withdrawScaled(bytes32 templateId, uint256 principalAmount) external returns (uint256 grossAmount);
 
+    /// @notice Detailed principal withdrawal surface for engine-side accounting.
+    function withdrawDetailed(bytes32 templateId, uint256 principalAmount)
+        external
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned);
+
+    /// @notice Withdraw by router-native attribution units rather than by principal.
+    function withdrawAttribution(bytes32 templateId, uint256 attributionUnits)
+        external
+        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned);
+
     /// @notice Current underlying value of the template's yield position.
     function currentValueOf(bytes32 templateId) external view returns (uint256);
+
+    /// @notice Current underlying value attributable to `attributionUnits` for `templateId`.
+    function previewValueByAttribution(bytes32 templateId, uint256 attributionUnits)
+        external
+        view
+        returns (uint256 currentValue);
 
     /// @notice Claim liquidity-mining rewards for aToken (no-op if rewards controller is zero).
     /// @dev **MUST** be restricted (typically `onlyEngine` when invoked via engine admin flows): not publicly callable.
