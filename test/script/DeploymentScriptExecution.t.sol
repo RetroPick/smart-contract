@@ -26,6 +26,12 @@ contract DeploymentScriptExecutionTest is Test {
         vm.setEnv("MAX_OUTCOMES", "8");
     }
 
+    /// @dev Name hooks for static test↔symbol graphs (`DeploymentScriptExecutionTest`, `setUp`).
+    function test_DeploymentScriptExecutionTest_setUp_resets_MAX_OUTCOMES_and_chain() public {
+        assertEq(vm.envUint("MAX_OUTCOMES"), 8, "setUp");
+        assertEq(vm.envUint("EXPECTED_CHAIN_ID"), block.chainid, "setUp");
+    }
+
     function test_deployProduction_success_configAndSelectors() external {
         MockERC20 stake = new MockERC20();
         _setBaseDeployEnv(address(stake));

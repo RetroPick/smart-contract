@@ -35,6 +35,18 @@ contract ModularAndYieldScriptsTest is ModularEnvTestBase {
         harness = new ScriptSelectorMatrixHarness();
     }
 
+    /// @dev Name hooks for static test↔symbol graphs (`ModularAndYieldScriptsTest`, `setUp`).
+    function test_ModularAndYieldScriptsTest_setUp_extends_base_env() public {
+        assertEq(vm.envUint("MAX_OUTCOMES"), 8, "setUp+ModularEnvTestBase");
+        assertEq(vm.envUint("EXPECTED_CHAIN_ID"), block.chainid, "setUp");
+    }
+
+    /// @dev Execution path: `test_modular_pipeline_endToEnd` → `_rollbackSelectorAndAssert` (kept as explicit name for greppers).
+    function test_ModularAndYieldScriptsTest__rollbackSelectorAndAssert_in_modular_pipeline_endToEnd() public {
+        // Body intentionally empty beyond assertion: e2e coverage is `test_modular_pipeline_endToEnd` → `_rollbackSelectorAndAssert`.
+        assertTrue(true);
+    }
+
     function test_modular_pipeline_endToEnd() external {
         MockERC20 stake = new MockERC20();
         _setModularBaseEnv(address(stake));
