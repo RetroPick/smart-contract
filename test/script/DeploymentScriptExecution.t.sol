@@ -20,6 +20,12 @@ contract DeploymentScriptExecutionTest is Test {
     bytes32 private constant DEPLOYMENT_COMPLETED_SIG = keccak256("DeploymentCompleted(address,address)");
     bytes32 private constant UPGRADE_COMPLETED_SIG = keccak256("UpgradeCompleted(address,address)");
 
+    /// @dev `vm.setEnv` is process-global; `test_deployCoreModular_reverts_onBounds` (other files) can leave `MAX_OUTCOMES=9`.
+    function setUp() public {
+        vm.setEnv("EXPECTED_CHAIN_ID", vm.toString(block.chainid));
+        vm.setEnv("MAX_OUTCOMES", "8");
+    }
+
     function test_deployProduction_success_configAndSelectors() external {
         MockERC20 stake = new MockERC20();
         _setBaseDeployEnv(address(stake));
@@ -89,6 +95,9 @@ contract DeploymentScriptExecutionTest is Test {
         Vm.Log memory log = _findLog(address(script), DEPLOYMENT_COMPLETED_SIG);
         address proxy = _topicAddress(log.topics[1]);
         assertTrue(address(IMarketEngine(proxy).stakeToken()) != address(0));
+
+        // `_setBaseDeployEnv(address(0))` intentionally leaves STAKE_TOKEN=0 for this path; later tests use `DeployProduction` / fixtures that require non-zero STAKE in env.
+        vm.setEnv("STAKE_TOKEN", vm.toString(makeAddr("post_faucet_stake")));
     }
 
     function test_deployLocal_success_emitsDeployment() external {

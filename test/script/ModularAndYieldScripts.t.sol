@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script} from "forge-std/Script.sol";
-import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {DeployCoreModular} from "../../script/modular/10_DeployCore.s.sol";
-import {DeployModulesModular} from "../../script/modular/20_DeployModules.s.sol";
 import {WireModulesModular} from "../../script/modular/30_WireModules.s.sol";
 import {ValidateModular} from "../../script/modular/40_Validate.s.sol";
 import {RollbackModular} from "../../script/modular/90_Rollback.s.sol";
@@ -18,6 +15,7 @@ import {ScriptSelectorMatrix} from "../../script/ScriptSelectorMatrix.sol";
 import {MockERC20} from "../../src/test/MockERC20.sol";
 import {MockAToken} from "../../src/test/MockAToken.sol";
 import {MockAavePool} from "../../src/test/MockAavePool.sol";
+import {ModularEnvTestBase} from "./ModularEnvTestBase.sol";
 
 contract ScriptSelectorMatrixHarness {
     function requireAll(address dispatcher) external view {
@@ -25,26 +23,15 @@ contract ScriptSelectorMatrixHarness {
     }
 }
 
-/// @dev Same pattern as `WireModulesModular`: `vm.startBroadcast` inside a `Script` so forge sets `msg.sender` to the broadcaster (admin) on the engine.
-contract ScriptSelectorMatrixWireAllScript is Script {
-    function wireForTest(MarketEngineDispatcher engine, ScriptSelectorMatrix.Modules memory m) external {
-        vm.startBroadcast();
-        ScriptSelectorMatrix.wireAll(engine, m);
-        vm.stopBroadcast();
-    }
-}
-
 /// forge-config: default.threads = 1
-contract ModularAndYieldScriptsTest is Test {
-    bytes32 private constant CORE_DEPLOYED_SIG = keccak256("CoreDeployed(address,address)");
-    bytes32 private constant MODULES_DEPLOYED_SIG =
-        keccak256("ModulesDeployed(address,address,address,address,address)");
+contract ModularAndYieldScriptsTest is ModularEnvTestBase {
     bytes32 private constant MODULES_WIRED_SIG = keccak256("ModulesWired(address)");
     bytes32 private constant SELECTOR_ROLLBACK_SIG = keccak256("SelectorRolledBack(address,bytes4,address)");
     bytes32 private constant YIELD_ROUTER_DEPLOYED_SIG = keccak256("YieldRouterDeployed(address)");
     ScriptSelectorMatrixHarness private harness;
 
-    function setUp() public {
+    function setUp() public override {
+        super.setUp();
         harness = new ScriptSelectorMatrixHarness();
     }
 
@@ -89,40 +76,6 @@ contract ModularAndYieldScriptsTest is Test {
         vm.setEnv("ROLLBACK_SELECTOR", vm.toString(uint256(uint32(IMarketEngine.getVaultBalances.selector))));
         vm.setEnv("ROLLBACK_MODULE", vm.toString(adminModule));
         _rollbackSelectorAndAssert(proxy);
-    }
-
-    /// @dev Names `ScriptSelectorMatrix.wireAll` for commit-hook / static test graphs (same wiring as `WireModulesModular.run`).
-    function test_ScriptSelectorMatrix_wireAll() public {
-        vm.setEnv("MAX_OUTCOMES", "8");
-        MockERC20 stake = new MockERC20();
-        _setModularBaseEnv(address(stake));
-
-        PreflightModular preflight = new PreflightModular();
-        preflight.run();
-
-        address proxy = _deployCoreAndGetProxy();
-        (
-            address adminModule,
-            address viewModule,
-            address userOpsClaimsModule,
-            address coreLifecycleModule,
-            address rollingLifecycleModule
-        ) = _deployAndExtractModules();
-
-        MarketEngineDispatcher d = MarketEngineDispatcher(payable(proxy));
-        ScriptSelectorMatrixWireAllScript w = new ScriptSelectorMatrixWireAllScript();
-        w.wireForTest(
-            d,
-            ScriptSelectorMatrix.Modules({
-                admin: adminModule,
-                viewModule: viewModule,
-                userOpsClaims: userOpsClaimsModule,
-                coreLifecycle: coreLifecycleModule,
-                rollingLifecycle: rollingLifecycleModule
-            })
-        );
-
-        ScriptSelectorMatrix.requireAllDelegatedSelectorsWired(d);
     }
 
     function test_deployCoreModular_reverts_onBounds() external {
@@ -189,55 +142,6 @@ contract ModularAndYieldScriptsTest is Test {
         script.run();
     }
 
-    function _setModularBaseEnv(address stakeToken) internal {
-        vm.setEnv("EXPECTED_CHAIN_ID", vm.toString(block.chainid));
-        vm.setEnv("OZ_UNSAFE_SKIP_ALL_CHECKS", "1");
-        vm.setEnv("STAKE_TOKEN", vm.toString(stakeToken));
-        vm.setEnv("PRICE_ORACLE", vm.toString(makeAddr("oracle")));
-        // Script calls run through startBroadcast(), so use origin-style sender for admin in script e2e tests.
-        vm.setEnv("ADMIN", vm.toString(tx.origin));
-        vm.setEnv("TREASURY", vm.toString(makeAddr("treasury")));
-        vm.setEnv("WORKER_AUTHORITY", vm.toString(makeAddr("worker")));
-        vm.setEnv("DEFAULT_SETTLEMENT_FEE_BPS", "100");
-        vm.setEnv("MAX_SWITCH_FEE_BPS", "300");
-        vm.setEnv("MAX_OUTCOMES", "8");
-        vm.setEnv("ORACLE_MAX_DELAY_SECONDS", "3600");
-        vm.setEnv("ORACLE_MAX_CONFIDENCE_BPS", "500");
-    }
-
-    function _topicAddress(bytes32 topic) internal pure returns (address) {
-        return address(uint160(uint256(topic)));
-    }
-
-    function _deployCoreAndGetProxy() internal returns (address proxy) {
-        DeployCoreModular core = new DeployCoreModular();
-        vm.recordLogs();
-        core.run();
-        Vm.Log memory coreLog = _findLog(address(core), CORE_DEPLOYED_SIG);
-        return _topicAddress(coreLog.topics[1]);
-    }
-
-    function _deployAndExtractModules()
-        internal
-        returns (
-            address adminModule,
-            address viewModule,
-            address userOpsClaimsModule,
-            address coreLifecycleModule,
-            address rollingLifecycleModule
-        )
-    {
-        DeployModulesModular deployModules = new DeployModulesModular();
-        vm.recordLogs();
-        deployModules.run();
-        Vm.Log memory modulesLog = _findLog(address(deployModules), MODULES_DEPLOYED_SIG);
-
-        adminModule = _topicAddress(modulesLog.topics[1]);
-        viewModule = _topicAddress(modulesLog.topics[2]);
-        (userOpsClaimsModule, coreLifecycleModule, rollingLifecycleModule) =
-            abi.decode(modulesLog.data, (address, address, address));
-    }
-
     function _wireModulesAndAssertProxy(address proxy) internal {
         WireModulesModular wire = new WireModulesModular();
         vm.recordLogs();
@@ -254,15 +158,5 @@ contract ModularAndYieldScriptsTest is Test {
         Vm.Log memory rollbackLog = _findLog(address(rollback), SELECTOR_ROLLBACK_SIG);
         assertEq(_topicAddress(rollbackLog.topics[1]), proxy);
         assertEq(address(uint160(uint256(rollbackLog.topics[3]))), rollbackModule);
-    }
-
-    function _findLog(address emitter, bytes32 sig) internal view returns (Vm.Log memory out) {
-        Vm.Log[] memory entries = vm.getRecordedLogs();
-        for (uint256 i; i < entries.length; ++i) {
-            if (entries[i].emitter == emitter && entries[i].topics.length > 0 && entries[i].topics[0] == sig) {
-                return entries[i];
-            }
-        }
-        revert("event not found");
     }
 }
