@@ -37,3 +37,17 @@ test-ledger
 .scripts/*
 lib/*
 .audit/*
+# Added by code-review-graph
+.code-review-graph/
+
+# Local AI / editor tooling
+.claude/
+.mcp.json
+.cursorrules
+CLAUDE.md
+
+# Local graph / generated review artifacts
+.code-review-graph.yml
+.codereviewignore
+smartcontract.html
+smartcontract.epub

@@ -391,33 +391,6 @@ abstract contract MarketEngineBase is Test {
         dispatcher.registerModule(coreLifecycleModule, keccak256(coreLifecycleModule.code));
         dispatcher.registerModule(rollingLifecycleModule, keccak256(rollingLifecycleModule.code));
 
-        dispatcher.setSelectorModule(bytes4(keccak256("pauseProgram(bool)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setTreasury(address)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setWorkerAuthority(address)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setDepositExecutor(address,bool)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setYieldRouter(address,uint16)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("resetYieldRouterFailures()")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setRateOracle(address)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setSmartDataOracle(address)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setMacroOracle(address)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setEquityOracle(address)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("resetOracleCursor(bytes32,bytes32)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("setLmRewardsEnabled(bool)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("keeperClaimLmRewards(bytes32)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("yieldEmergencyWithdraw(bytes32)")), adminModule, false);
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("recoverRoutedSettledClaims(bytes32,uint64,uint256)")), adminModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("reconcileEpochRoutedPrincipal(bytes32,uint64,uint256)")), adminModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("reassignRecoveredBalance(bytes32,bytes32,uint256)")), adminModule, false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("finalizeRecoveredYield(bytes32)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("initializeMarket(bytes32)")), adminModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("withdrawFees(bytes32,uint256)")), adminModule, false);
-
         dispatcher.setSelectorModule(
             bytes4(keccak256("getUserEpochs(bytes32,address,uint256,uint256)")), viewModule, false
         );
@@ -435,18 +408,6 @@ abstract contract MarketEngineBase is Test {
         dispatcher.setSelectorModule(bytes4(keccak256("getOperatorTemplateView(bytes32)")), viewModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("getOperatorGlobalView()")), viewModule, false);
         dispatcher.setSelectorModule(bytes4(keccak256("unreconciledRecoveredByTemplate(bytes32)")), viewModule, false);
-
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("depositToSide(bytes32,uint64,uint8,uint256)")), userOpsClaimsModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("depositToSideFor(address,bytes32,uint64,uint8,uint256)")), userOpsClaimsModule, false
-        );
-        dispatcher.setSelectorModule(
-            bytes4(keccak256("switchSide(bytes32,uint64,uint8,uint8,uint256)")), userOpsClaimsModule, false
-        );
-        dispatcher.setSelectorModule(bytes4(keccak256("claim(bytes32,uint64)")), userOpsClaimsModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("claimMany(bytes32,uint64[])")), userOpsClaimsModule, false);
 
         dispatcher.setSelectorModule(MarketEngine.upsertTemplate.selector, coreLifecycleModule, false);
         dispatcher.setSelectorModule(

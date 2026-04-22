@@ -109,34 +109,10 @@ contract MarketEngineAdminSecurity is Test {
         d.registerModule(coreMod, keccak256(coreMod.code));
         d.registerModule(rollingMod, keccak256(rollingMod.code));
 
-        d.setSelectorModule(bytes4(keccak256("pauseProgram(bool)")), adminMod, false);
-        d.setSelectorModule(bytes4(keccak256("setTreasury(address)")), adminMod, false);
-        d.setSelectorModule(bytes4(keccak256("setWorkerAuthority(address)")), adminMod, false);
-        d.setSelectorModule(bytes4(keccak256("setDepositExecutor(address,bool)")), adminMod, false);
-        d.setSelectorModule(bytes4(keccak256("setYieldRouter(address,uint16)")), adminMod, false);
-        d.setSelectorModule(bytes4(keccak256("resetYieldRouterFailures()")), adminMod, false);
-        d.setSelectorModule(bytes4(keccak256("setRateOracle(address)")), adminMod, false);
-        d.setSelectorModule(bytes4(keccak256("setSmartDataOracle(address)")), adminMod, false);
-        d.setSelectorModule(bytes4(keccak256("setMacroOracle(address)")), adminMod, false);
-        d.setSelectorModule(bytes4(keccak256("setEquityOracle(address)")), adminMod, false);
-        d.setSelectorModule(bytes4(keccak256("setLmRewardsEnabled(bool)")), adminMod, false);
-        d.setSelectorModule(bytes4(keccak256("keeperClaimLmRewards(bytes32)")), adminMod, false);
-        d.setSelectorModule(bytes4(keccak256("yieldEmergencyWithdraw(bytes32)")), adminMod, false);
-        d.setSelectorModule(bytes4(keccak256("initializeMarket(bytes32)")), adminMod, false);
-        d.setSelectorModule(bytes4(keccak256("withdrawFees(bytes32,uint256)")), adminMod, false);
-
         d.setSelectorModule(bytes4(keccak256("getUserEpochs(bytes32,address,uint256,uint256)")), viewMod, false);
         d.setSelectorModule(bytes4(keccak256("getVaultBalances(bytes32)")), viewMod, false);
         d.setSelectorModule(bytes4(keccak256("getRollingLifecycle(bytes32)")), viewMod, false);
         d.setSelectorModule(bytes4(keccak256("getEpoch(bytes32,uint64)")), viewMod, false);
-
-        d.setSelectorModule(bytes4(keccak256("depositToSide(bytes32,uint64,uint8,uint256)")), userOpsMod, false);
-        d.setSelectorModule(
-            bytes4(keccak256("depositToSideFor(address,bytes32,uint64,uint8,uint256)")), userOpsMod, false
-        );
-        d.setSelectorModule(bytes4(keccak256("switchSide(bytes32,uint64,uint8,uint8,uint256)")), userOpsMod, false);
-        d.setSelectorModule(bytes4(keccak256("claim(bytes32,uint64)")), userOpsMod, false);
-        d.setSelectorModule(bytes4(keccak256("claimMany(bytes32,uint64[])")), userOpsMod, false);
 
         d.setSelectorModule(MarketEngine.upsertTemplate.selector, coreMod, false);
         d.setSelectorModule(bytes4(keccak256("openEpoch(bytes32,uint64,uint64,uint64,uint64)")), coreMod, false);
@@ -152,7 +128,6 @@ contract MarketEngineAdminSecurity is Test {
         d.setSelectorModule(
             bytes4(keccak256("cancelRollingEpochWhileHalted(bytes32,uint64,uint8,bool)")), rollingMod, false
         );
-        d.setSelectorModule(bytes4(keccak256("templateIdFromSlug(string)")), viewMod, false);
         vm.stopPrank();
     }
 

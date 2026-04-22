@@ -63,28 +63,29 @@ contract MarketEngineDispatcherTest is Test {
 
     function test_AdminCanSetSelectorModuleAndDelegateCall() public {
         _registerMockModule();
+        bytes32 tid = bytes32("x");
         vm.prank(admin);
-        engine.setSelectorModule(bytes4(keccak256("pauseProgram(bool)")), address(module), false);
+        engine.setSelectorModule(bytes4(keccak256("getVaultBalances(bytes32)")), address(module), false);
 
-        vm.prank(admin);
-        (bool ok,) = address(engine).call(abi.encodeWithSignature("pauseProgram(bool)", true));
+        (bool ok, bytes memory ret) = address(engine).call(abi.encodeWithSignature("getVaultBalances(bytes32)", tid));
         assertTrue(ok);
-        assertTrue(engine.globalPaused());
+        (uint256 active, uint256 claims, uint256 fees) = abi.decode(ret, (uint256, uint256, uint256));
+        assertEq(active, 0);
+        assertEq(claims, 0);
+        assertEq(fees, 0);
     }
 
     function test_RejectRootOwnedSelectorRegistration() public {
         _registerMockModule();
         vm.prank(admin);
-        bytes4 initSelector = bytes4(
-            keccak256("initialize((address,address,address,address,address,uint16,uint16,uint8,uint8,uint64,uint16))")
-        );
-        vm.expectRevert(abi.encodeWithSelector(MarketEngineState.SelectorImmutable.selector, initSelector));
-        engine.setSelectorModule(initSelector, address(module), false);
+        bytes4 directSelector = IMarketEngine.pauseProgram.selector;
+        vm.expectRevert(abi.encodeWithSelector(MarketEngineState.SelectorImmutable.selector, directSelector));
+        engine.setSelectorModule(directSelector, address(module), false);
     }
 
     function test_ImmutableSelectorCannotBeReplaced() public {
         _registerMockModule();
-        bytes4 selector = bytes4(keccak256("setTreasury(address)"));
+        bytes4 selector = bytes4(keccak256("getVaultBalances(bytes32)"));
         vm.startPrank(admin);
         engine.setSelectorModule(selector, address(module), true);
         vm.expectRevert(abi.encodeWithSelector(MarketEngineState.SelectorImmutable.selector, selector));
@@ -112,7 +113,7 @@ contract MarketEngineDispatcherTest is Test {
 
     function test_getSelectorModule_returns_set_values() public {
         _registerMockModule();
-        bytes4 selector = bytes4(keccak256("pauseProgram(bool)"));
+        bytes4 selector = bytes4(keccak256("getVaultBalances(bytes32)"));
         vm.prank(admin);
         engine.setSelectorModule(selector, address(module), true);
 

@@ -37,21 +37,30 @@ This is the deep, code-accurate documentation for the current Solidity implement
 
 ## 0) End-to-end operations: deploy → new template → settlement → treasury
 
-This is the **operator narrative** for the current codebase. Every call uses the **same UUPS proxy address**; the proxy’s `fallback` `delegatecall`s into a **module** chosen by `msg.sig` ([`MarketEngineDispatcher`](../src/engine/MarketEngineDispatcher.sol)). Shared storage is defined once in [`MarketEngineState`](../src/engine/MarketEngineState.sol); modules only supply code.
+This is the **operator narrative** for the current codebase. Every call uses the **same UUPS proxy address**, but the V2 dispatcher boundary is now **hybrid**:
+
+- **hot admin + user/claims entrypoints are implemented directly on `MarketEngineDispatcher`**
+- **lifecycle + view entrypoints still route through the proxy `fallback` into a selector-mapped module**
+
+Shared storage is defined once in [`MarketEngineState`](../src/engine/MarketEngineState.sol); delegated modules and direct root functions operate on that same proxy storage.
 
 ### 0.1 Cold deploy (one protocol instance on a chain)
 
 1. Deploy [`ChainlinkAdapter`](../src/adapters/ChainlinkAdapter.sol) (sequencer feed address or `address(0)` on L1).
 2. Optionally deploy [`TrustedReporterAdapter`](../src/oracle/TrustedReporterAdapter.sol) for templates with `templateOracleKind == TrustedReporter` (`eventOracle` on the template points here; not used as `priceOracle` on `initialize`).
 3. Deploy **`MarketEngineDispatcher`** behind an ERC-1967 UUPS proxy with `initialize(...)` in the initializer path ([`script/production/DeployProduction.s.sol`](../script/production/DeployProduction.s.sol) for production and [`script/test/DeployTestnet.s.sol`](../script/test/DeployTestnet.s.sol) for testnet, both using OpenZeppelin Foundry Upgrades with **`--ffi`** validation).
-4. In the same broadcast, deploy **five module contracts** and register each public entrypoint with `setSelectorModule(selector, module, immutableFlag)` on the **proxy**:
-   - [`MarketEngineAdminModule`](../src/engine/modules/MarketEngineAdminModule.sol) — `pauseProgram`, `setTreasury` / `setWorkerAuthority`, `setDepositExecutor`, `setYieldRouter` / `setLmRewardsEnabled`, `setRateOracle` / `setSmartDataOracle` / `setMacroOracle` / `setEquityOracle`, `keeperClaimLmRewards`, `yieldEmergencyWithdraw`, `initializeMarket`, `withdrawFees`
+4. In the same broadcast, deploy the module contracts and register **only delegated selectors** with `setSelectorModule(selector, module, immutableFlag)` on the **proxy**:
    - [`MarketEngineCoreLifecycleModule`](../src/engine/modules/MarketEngineCoreLifecycleModule.sol) — `upsertTemplate`, manual `openEpoch` / `lockEpoch` / `resolveEpoch` (+ batches), `cancelEpoch` (when rolling is not `Live`)
    - [`MarketEngineRollingLifecycleModule`](../src/engine/modules/MarketEngineRollingLifecycleModule.sol) — `genesisStartRolling`, `genesisLockRolling`, `executeRollingRound` (+ batch), `haltRollingMarket`, `cancelRollingEpochWhileHalted`, `resetRollingLifecycle`
-   - [`MarketEngineUserOpsClaimsModule`](../src/engine/modules/MarketEngineUserOpsClaimsModule.sol) — `depositToSide`, `depositToSideFor`, `switchSide`, `claim`, `claimMany`
-   - [`MarketEngineViewModule`](../src/engine/modules/MarketEngineViewModule.sol) — `getUserEpochs`, `getVaultBalances`, `getRollingLifecycle`, `getEpoch`
+   - [`MarketEngineViewModule`](../src/engine/modules/MarketEngineViewModule.sol) — view selectors such as `getUserEpochs`, `getVaultBalances`, `getRollingLifecycle`, `getEpoch`, and the richer V2 view surface
 
-Selectors not mapped revert with `ModuleNotSet(selector)`. The dispatcher **keeps** `initialize`, `upgradeToAndCall`, `proxiableUUID`, and `setSelectorModule` on the root contract (not delegated).
+The dispatcher keeps these selectors **root-owned** and rejects module rewiring for them:
+
+- root protocol selectors: `initialize`, `upgradeToAndCall`, `proxiableUUID`, `setSelectorModule`
+- direct admin selectors: `pauseProgram`, treasury/worker/oracle/router admin, recovery functions, `initializeMarket`, `withdrawFees`
+- direct user selectors: `depositToSide`, `depositToSideFor`, `switchSide`, `claim`, `claimMany`
+
+Only delegated selectors can return `ModuleNotSet(selector)`. Root-owned selectors execute from `MarketEngineDispatcher` bytecode and ignore module-registry state.
 
 A full selector matrix lives in [`.docs/migrations/marketengine_selector_matrix.md`](./migrations/marketengine_selector_matrix.md).
 
@@ -114,7 +123,7 @@ flowchart LR
 
 ### 1.1 One engine, many markets
 
-RetroPick deploys **one** UUPS proxy whose implementation is [`MarketEngineDispatcher`](../src/engine/MarketEngineDispatcher.sol). The **proxy address** is the engine; execution is delegated to modules, but **all storage** is the single layout in [`MarketEngineState`](../src/engine/MarketEngineState.sol) (templates, ledgers, epochs, positions, vault mirrors, yield router pointer, selector routing).
+RetroPick deploys **one** UUPS proxy whose implementation is [`MarketEngineDispatcher`](../src/engine/MarketEngineDispatcher.sol). The **proxy address** is the engine. In V2, admin/user hot paths execute directly from dispatcher bytecode, while lifecycle/view selectors are still delegated to modules. **All storage** is the single layout in [`MarketEngineState`](../src/engine/MarketEngineState.sol) (templates, ledgers, epochs, positions, vault mirrors, yield router pointer, selector routing).
 
 The engine computes:
 
@@ -200,7 +209,7 @@ Canonical deploy scripts (both with **`--ffi`** for OpenZeppelin upgrades checks
 1. Reads env: `STAKE_TOKEN`, `SEQUENCER_FEED` (`address(0)` on L1), `ADMIN`, `TREASURY`, `WORKER`, fee caps, oracle globals.
 2. Deploys `ChainlinkAdapter(sequencerFeed)` plus `RateAdapter`, `SmartDataAdapter`, `MacroAdapter`, and `EquityAdapter`.
 3. Deploys a **UUPS proxy** for **`MarketEngineDispatcher`** with `initialize(IERC20,IPriceOracle,admin,treasury,worker,...)` (`OracleKind.Chainlink`).
-4. Deploys the five module contracts and calls `setSelectorModule` on the proxy for each routed function selector (admin / core lifecycle / rolling / user+claims / view).
+4. Deploys the lifecycle/view module contracts and calls `setSelectorModule` on the proxy for each **delegated** selector. V2 direct admin/user selectors are root-owned on the dispatcher and must **not** be wired through the module registry.
 5. Sets non-default oracle adapters via `setRateOracle`, `setSmartDataOracle`, `setMacroOracle`, and `setEquityOracle`.
 6. Optionally deploys [`TrustedReporterAdapter`](../src/oracle/TrustedReporterAdapter.sol) when `TRUSTED_REPORTER` is provided; TrustedReporter is selected later per template (`templateOracleKind=TrustedReporter` + `eventOracle`).
 
@@ -1000,8 +1009,8 @@ Full router withdrawals for a template use **template-scoped** amounts (scaled b
 
 ## 14) Toolchain, artifacts, and references
 
-- **Solidity 0.8.24**, **Cancun** EVM; [`MarketEngineDispatcher`](../src/engine/MarketEngineDispatcher.sol) inherits `ReentrancyGuardTransient` (transient storage). **Resolve** entrypoints on lifecycle modules use `nonReentrant` where reentrancy risk exists.
-- **Core bytecode**: proxy → `MarketEngineDispatcher` + delegatecall modules (§0.1). **Not** a monolithic `src/MarketEngine.sol` in this package.
+- **Solidity 0.8.24**, **Cancun** EVM; [`MarketEngineDispatcher`](../src/engine/MarketEngineDispatcher.sol) inherits `ReentrancyGuardTransient` through the direct user-ops surface. Lifecycle resolve paths that remain delegated keep their own `nonReentrant` entrypoints where reentrancy risk exists.
+- **Core bytecode**: proxy → `MarketEngineDispatcher` root hot paths + delegatecall modules for lifecycle/view selectors (§0.1). **Not** a monolithic `src/MarketEngine.sol` in this package.
 - **Tests**: harness in [`test/MarketEngineBase.t.sol`](../test/MarketEngineBase.t.sol); mocks often under [`src/test/`](../src/test/) (e.g. `MockPriceOracle`, `MockAavePool`).
 - [`.docs/migrations/marketengine_selector_matrix.md`](./migrations/marketengine_selector_matrix.md) — selector → module map.
 - [`deployment/DEPLOYMENT_AND_EPOCHS.md`](./deployment/DEPLOYMENT_AND_EPOCHS.md) — operational guide (verify against this doc + code).

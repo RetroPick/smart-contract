@@ -26,24 +26,6 @@ library ScriptSelectorMatrix {
         dispatcher.registerModule(m.coreLifecycle, keccak256(m.coreLifecycle.code));
         dispatcher.registerModule(m.rollingLifecycle, keccak256(m.rollingLifecycle.code));
 
-        // Admin / config selectors
-        dispatcher.setSelectorModule(IMarketEngine.pauseProgram.selector, m.admin, false);
-        dispatcher.setSelectorModule(IMarketEngine.setTreasury.selector, m.admin, false);
-        dispatcher.setSelectorModule(IMarketEngine.setWorkerAuthority.selector, m.admin, false);
-        dispatcher.setSelectorModule(IMarketEngine.setDepositExecutor.selector, m.admin, false);
-        dispatcher.setSelectorModule(IMarketEngine.setYieldRouter.selector, m.admin, false);
-        dispatcher.setSelectorModule(IMarketEngine.resetYieldRouterFailures.selector, m.admin, false);
-        dispatcher.setSelectorModule(IMarketEngine.setRateOracle.selector, m.admin, false);
-        dispatcher.setSelectorModule(IMarketEngine.setSmartDataOracle.selector, m.admin, false);
-        dispatcher.setSelectorModule(IMarketEngine.setMacroOracle.selector, m.admin, false);
-        dispatcher.setSelectorModule(IMarketEngine.setEquityOracle.selector, m.admin, false);
-        dispatcher.setSelectorModule(IMarketEngine.setLmRewardsEnabled.selector, m.admin, false);
-        dispatcher.setSelectorModule(IMarketEngine.keeperClaimLmRewards.selector, m.admin, false);
-        dispatcher.setSelectorModule(IMarketEngine.yieldEmergencyWithdraw.selector, m.admin, false);
-        dispatcher.setSelectorModule(IMarketEngine.recoverRoutedSettledClaims.selector, m.admin, false);
-        dispatcher.setSelectorModule(IMarketEngine.initializeMarket.selector, m.admin, false);
-        dispatcher.setSelectorModule(IMarketEngine.withdrawFees.selector, m.admin, false);
-
         // View selectors
         dispatcher.setSelectorModule(IMarketEngine.getUserEpochs.selector, m.viewModule, false);
         dispatcher.setSelectorModule(IMarketEngine.getVaultBalances.selector, m.viewModule, false);
@@ -58,13 +40,6 @@ library ScriptSelectorMatrix {
         dispatcher.setSelectorModule(IMarketEngine.getOperatorTemplateView.selector, m.viewModule, false);
         dispatcher.setSelectorModule(IMarketEngine.getOperatorGlobalView.selector, m.viewModule, false);
         dispatcher.setSelectorModule(IMarketEngine.unreconciledRecoveredByTemplate.selector, m.viewModule, false);
-
-        // User operations + claims selectors
-        dispatcher.setSelectorModule(IMarketEngine.depositToSide.selector, m.userOpsClaims, false);
-        dispatcher.setSelectorModule(IMarketEngine.depositToSideFor.selector, m.userOpsClaims, false);
-        dispatcher.setSelectorModule(IMarketEngine.switchSide.selector, m.userOpsClaims, false);
-        dispatcher.setSelectorModule(IMarketEngine.claim.selector, m.userOpsClaims, false);
-        dispatcher.setSelectorModule(IMarketEngine.claimMany.selector, m.userOpsClaims, false);
 
         // Core lifecycle selectors
         dispatcher.setSelectorModule(IMarketEngine.upsertTemplate.selector, m.coreLifecycle, false);
@@ -86,26 +61,10 @@ library ScriptSelectorMatrix {
         dispatcher.setSelectorModule(IMarketEngine.resetRollingLifecycle.selector, m.rollingLifecycle, false);
     }
 
-    /// @notice Every selector registered in `wireAll` — use in tests to detect wiring drift.
+    /// @notice Every delegated selector registered in `wireAll` — direct V2 admin/userops selectors are root-owned.
     function delegatedSelectors() internal pure returns (bytes4[] memory s) {
-        s = new bytes4[](48);
+        s = new bytes4[](28);
         uint256 i;
-        s[i++] = IMarketEngine.pauseProgram.selector;
-        s[i++] = IMarketEngine.setTreasury.selector;
-        s[i++] = IMarketEngine.setWorkerAuthority.selector;
-        s[i++] = IMarketEngine.setDepositExecutor.selector;
-        s[i++] = IMarketEngine.setYieldRouter.selector;
-        s[i++] = IMarketEngine.resetYieldRouterFailures.selector;
-        s[i++] = IMarketEngine.setRateOracle.selector;
-        s[i++] = IMarketEngine.setSmartDataOracle.selector;
-        s[i++] = IMarketEngine.setMacroOracle.selector;
-        s[i++] = IMarketEngine.setEquityOracle.selector;
-        s[i++] = IMarketEngine.setLmRewardsEnabled.selector;
-        s[i++] = IMarketEngine.keeperClaimLmRewards.selector;
-        s[i++] = IMarketEngine.yieldEmergencyWithdraw.selector;
-        s[i++] = IMarketEngine.recoverRoutedSettledClaims.selector;
-        s[i++] = IMarketEngine.initializeMarket.selector;
-        s[i++] = IMarketEngine.withdrawFees.selector;
         s[i++] = IMarketEngine.getUserEpochs.selector;
         s[i++] = IMarketEngine.getVaultBalances.selector;
         s[i++] = IMarketEngine.getRollingLifecycle.selector;
@@ -118,11 +77,7 @@ library ScriptSelectorMatrix {
         s[i++] = IMarketEngine.getTemplateYieldView.selector;
         s[i++] = IMarketEngine.getOperatorTemplateView.selector;
         s[i++] = IMarketEngine.getOperatorGlobalView.selector;
-        s[i++] = IMarketEngine.depositToSide.selector;
-        s[i++] = IMarketEngine.depositToSideFor.selector;
-        s[i++] = IMarketEngine.switchSide.selector;
-        s[i++] = IMarketEngine.claim.selector;
-        s[i++] = IMarketEngine.claimMany.selector;
+        s[i++] = IMarketEngine.unreconciledRecoveredByTemplate.selector;
         s[i++] = IMarketEngine.upsertTemplate.selector;
         s[i++] = IMarketEngine.openEpoch.selector;
         s[i++] = IMarketEngine.openEpochsBatch.selector;
@@ -138,7 +93,7 @@ library ScriptSelectorMatrix {
         s[i++] = IMarketEngine.haltRollingMarket.selector;
         s[i++] = IMarketEngine.cancelRollingEpochWhileHalted.selector;
         s[i++] = IMarketEngine.resetRollingLifecycle.selector;
-        require(i == 48, "delegatedSelectors length");
+        require(i == 28, "delegatedSelectors length");
     }
 
     /// @dev Reverts with `selector not wired` if any delegated selector maps to `address(0)`.

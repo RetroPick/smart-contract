@@ -154,7 +154,11 @@ contract MarketEngineUserOpsClaimsModule is MarketEngineState, ReentrancyGuardTr
         uint64 nowTs = uint64(block.timestamp);
         if (!e.isEpochOpen(nowTs)) revert BettingClosed();
 
+        uint256 balanceBefore = stakeToken.balanceOf(address(this));
         stakeToken.safeTransferFrom(payer, address(this), amount);
+        uint256 balanceAfter = stakeToken.balanceOf(address(this));
+        if (balanceAfter < balanceBefore) revert YieldRouterBalanceInvariant();
+        if (balanceAfter - balanceBefore != amount) revert NonStandardStakeToken();
 
         bytes32 pk = positionKey(templateId, epochId);
         MarketTypes.Position storage pos = _positions[pk][beneficiary];

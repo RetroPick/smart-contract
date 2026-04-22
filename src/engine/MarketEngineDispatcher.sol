@@ -160,7 +160,35 @@ contract MarketEngineDispatcher is
 
     function _isRootOwnedSelector(bytes4 selector) private pure returns (bool) {
         return selector == SELECTOR_INITIALIZE || selector == SELECTOR_UPGRADE_TO_AND_CALL
-            || selector == SELECTOR_PROXIABLE_UUID || selector == SELECTOR_SET_SELECTOR_MODULE;
+            || selector == SELECTOR_PROXIABLE_UUID || selector == SELECTOR_SET_SELECTOR_MODULE
+            || _isDirectAdminSelector(selector) || _isDirectUserOpsSelector(selector);
+    }
+
+    function _isDirectAdminSelector(bytes4 selector) private pure returns (bool) {
+        return selector == IMarketEngine.pauseProgram.selector || selector == IMarketEngine.setWorkerAuthority.selector
+            || selector == IMarketEngine.setTreasury.selector
+            || selector == IMarketEngine.setDepositExecutor.selector
+            || selector == IMarketEngine.setYieldRouter.selector
+            || selector == IMarketEngine.setRateOracle.selector
+            || selector == IMarketEngine.setSmartDataOracle.selector
+            || selector == IMarketEngine.setMacroOracle.selector
+            || selector == IMarketEngine.setEquityOracle.selector
+            || selector == IMarketEngine.resetOracleCursor.selector
+            || selector == IMarketEngine.setLmRewardsEnabled.selector
+            || selector == IMarketEngine.keeperClaimLmRewards.selector
+            || selector == IMarketEngine.yieldEmergencyWithdraw.selector
+            || selector == IMarketEngine.reconcileEpochRoutedPrincipal.selector
+            || selector == IMarketEngine.recoverRoutedSettledClaims.selector
+            || selector == IMarketEngine.finalizeRecoveredYield.selector
+            || selector == IMarketEngine.reassignRecoveredBalance.selector
+            || selector == IMarketEngine.resetYieldRouterFailures.selector
+            || selector == IMarketEngine.initializeMarket.selector || selector == IMarketEngine.withdrawFees.selector;
+    }
+
+    function _isDirectUserOpsSelector(bytes4 selector) private pure returns (bool) {
+        return selector == IMarketEngine.depositToSide.selector || selector == IMarketEngine.depositToSideFor.selector
+            || selector == IMarketEngine.switchSide.selector || selector == IMarketEngine.claim.selector
+            || selector == IMarketEngine.claimMany.selector;
     }
 
     function _delegateForSelector(bytes4 selector) private {

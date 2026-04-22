@@ -43,12 +43,11 @@ contract DeploymentScriptExecutionTest is Test {
         assertEq(engine.workerAuthority(), makeAddr("worker"));
 
         MarketEngineDispatcher dispatcher = MarketEngineDispatcher(payable(proxy));
-        (address pauseModule,) = dispatcher.getSelectorModule(bytes4(keccak256("pauseProgram(bool)")));
-        (address depositModule,) =
-            dispatcher.getSelectorModule(bytes4(keccak256("depositToSide(bytes32,uint64,uint8,uint256)")));
+        (address viewModule,) = dispatcher.getSelectorModule(bytes4(keccak256("getVaultBalances(bytes32)")));
+        (address coreModule,) = dispatcher.getSelectorModule(IMarketEngine.upsertTemplate.selector);
         (address rollingModule,) = dispatcher.getSelectorModule(bytes4(keccak256("executeRollingRound(bytes32)")));
-        assertTrue(pauseModule != address(0));
-        assertTrue(depositModule != address(0));
+        assertTrue(viewModule != address(0));
+        assertTrue(coreModule != address(0));
         assertTrue(rollingModule != address(0));
 
         ScriptSelectorMatrix.requireAllDelegatedSelectorsWired(dispatcher);

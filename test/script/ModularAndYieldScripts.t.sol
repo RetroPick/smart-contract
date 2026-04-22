@@ -54,11 +54,11 @@ contract ModularAndYieldScriptsTest is Test {
         validate.run();
 
         MarketEngineDispatcher dispatcher = MarketEngineDispatcher(payable(proxy));
-        (address pauseModule,) = dispatcher.getSelectorModule(bytes4(keccak256("pauseProgram(bool)")));
-        assertEq(pauseModule, adminModule);
+        (address vaultsModule,) = dispatcher.getSelectorModule(bytes4(keccak256("getVaultBalances(bytes32)")));
+        assertEq(vaultsModule, viewModule);
 
-        vm.setEnv("ROLLBACK_SELECTOR", vm.toString(uint256(uint32(bytes4(keccak256("pauseProgram(bool)"))))));
-        vm.setEnv("ROLLBACK_MODULE", vm.toString(viewModule));
+        vm.setEnv("ROLLBACK_SELECTOR", vm.toString(uint256(uint32(bytes4(keccak256("getVaultBalances(bytes32)"))))));
+        vm.setEnv("ROLLBACK_MODULE", vm.toString(adminModule));
         _rollbackSelectorAndAssert(proxy);
     }
 
@@ -81,6 +81,7 @@ contract ModularAndYieldScriptsTest is Test {
         vm.setEnv("AAVE_POOL", vm.toString(address(pool)));
         vm.setEnv("A_TOKEN", vm.toString(address(aToken)));
         vm.setEnv("V2_ENGINE_PROXY", vm.toString(makeAddr("engine")));
+        vm.setEnv("ENGINE_PROXY", vm.toString(makeAddr("engine")));
         vm.setEnv("REWARDS_CONTROLLER", vm.toString(address(0)));
         vm.setEnv("STATA_TOKEN", vm.toString(address(0)));
         vm.setEnv("EXPECTED_CHAIN_ID", vm.toString(block.chainid));
@@ -118,6 +119,7 @@ contract ModularAndYieldScriptsTest is Test {
         vm.setEnv("AAVE_POOL", vm.toString(makeAddr("pool")));
         vm.setEnv("A_TOKEN", vm.toString(makeAddr("atoken")));
         vm.setEnv("V2_ENGINE_PROXY", vm.toString(address(0)));
+        vm.setEnv("ENGINE_PROXY", vm.toString(address(0)));
 
         DeployYieldRouterV2 script = new DeployYieldRouterV2();
         vm.expectRevert();
