@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
+import {Script} from "forge-std/Script.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {DeployCoreModular} from "../../script/modular/10_DeployCore.s.sol";
@@ -21,6 +22,15 @@ import {MockAavePool} from "../../src/test/MockAavePool.sol";
 contract ScriptSelectorMatrixHarness {
     function requireAll(address dispatcher) external view {
         ScriptSelectorMatrix.requireAllDelegatedSelectorsWired(MarketEngineDispatcher(payable(dispatcher)));
+    }
+}
+
+/// @dev Same pattern as `WireModulesModular`: `vm.startBroadcast` inside a `Script` so forge sets `msg.sender` to the broadcaster (admin) on the engine.
+contract ScriptSelectorMatrixWireAllScript is Script {
+    function wireForTest(MarketEngineDispatcher engine, ScriptSelectorMatrix.Modules memory m) external {
+        vm.startBroadcast();
+        ScriptSelectorMatrix.wireAll(engine, m);
+        vm.stopBroadcast();
     }
 }
 
@@ -73,12 +83,46 @@ contract ModularAndYieldScriptsTest is Test {
         assertFalse(dispatcher.isModuleApproved(userOpsClaimsModule));
         (address pauseModule,) = dispatcher.getSelectorModule(IMarketEngine.pauseProgram.selector);
         assertEq(pauseModule, address(0));
-        (address vaultsModule,) = dispatcher.getSelectorModule(bytes4(keccak256("getVaultBalances(bytes32)")));
+        (address vaultsModule,) = dispatcher.getSelectorModule(IMarketEngine.getVaultBalances.selector);
         assertEq(vaultsModule, viewModule);
 
-        vm.setEnv("ROLLBACK_SELECTOR", vm.toString(uint256(uint32(bytes4(keccak256("getVaultBalances(bytes32)"))))));
+        vm.setEnv("ROLLBACK_SELECTOR", vm.toString(uint256(uint32(IMarketEngine.getVaultBalances.selector))));
         vm.setEnv("ROLLBACK_MODULE", vm.toString(adminModule));
         _rollbackSelectorAndAssert(proxy);
+    }
+
+    /// @dev Names `ScriptSelectorMatrix.wireAll` for commit-hook / static test graphs (same wiring as `WireModulesModular.run`).
+    function test_ScriptSelectorMatrix_wireAll() public {
+        vm.setEnv("MAX_OUTCOMES", "8");
+        MockERC20 stake = new MockERC20();
+        _setModularBaseEnv(address(stake));
+
+        PreflightModular preflight = new PreflightModular();
+        preflight.run();
+
+        address proxy = _deployCoreAndGetProxy();
+        (
+            address adminModule,
+            address viewModule,
+            address userOpsClaimsModule,
+            address coreLifecycleModule,
+            address rollingLifecycleModule
+        ) = _deployAndExtractModules();
+
+        MarketEngineDispatcher d = MarketEngineDispatcher(payable(proxy));
+        ScriptSelectorMatrixWireAllScript w = new ScriptSelectorMatrixWireAllScript();
+        w.wireForTest(
+            d,
+            ScriptSelectorMatrix.Modules({
+                admin: adminModule,
+                viewModule: viewModule,
+                userOpsClaims: userOpsClaimsModule,
+                coreLifecycle: coreLifecycleModule,
+                rollingLifecycle: rollingLifecycleModule
+            })
+        );
+
+        ScriptSelectorMatrix.requireAllDelegatedSelectorsWired(d);
     }
 
     function test_deployCoreModular_reverts_onBounds() external {
