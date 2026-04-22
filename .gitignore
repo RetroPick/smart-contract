@@ -37,6 +37,10 @@ test-ledger
 .scripts/*
 lib/*
 .audit/*
+.dev/*
+.operator/*
+.reports/*
+
 # Added by code-review-graph
 .code-review-graph/
 
