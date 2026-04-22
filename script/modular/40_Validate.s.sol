@@ -12,7 +12,7 @@ contract ValidateModular is Script {
         (address pauseModule, bool pauseImmutable) = engine.getSelectorModule(IMarketEngine.pauseProgram.selector);
         console2.log("pauseProgram module (expected zero in V2)", pauseModule);
         console2.log("pauseProgram immutable (expected false in V2)", pauseImmutable);
-        (address moduleView,) = engine.getSelectorModule(bytes4(keccak256("getVaultBalances(bytes32)")));
+        (address moduleView,) = engine.getSelectorModule(IMarketEngine.getVaultBalances.selector);
         console2.log("getVaultBalances module", moduleView);
         (address moduleUpsert,) = engine.getSelectorModule(IMarketEngine.upsertTemplate.selector);
         console2.log("upsertTemplate module", moduleUpsert);
