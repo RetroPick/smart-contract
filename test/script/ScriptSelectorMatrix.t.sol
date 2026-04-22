@@ -77,6 +77,7 @@ contract ScriptSelectorMatrixTest is Test {
 contract ScriptSelectorMatrixWireIntegrationTest is ModularEnvTestBase {
     function setUp() public override {
         super.setUp();
+        vm.setEnv("MAX_OUTCOMES", "8");
     }
 
     function test_ScriptSelectorMatrix_wireAll() public {
