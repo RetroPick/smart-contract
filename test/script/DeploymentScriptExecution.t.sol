@@ -43,9 +43,18 @@ contract DeploymentScriptExecutionTest is Test {
         assertEq(engine.workerAuthority(), makeAddr("worker"));
 
         MarketEngineDispatcher dispatcher = MarketEngineDispatcher(payable(proxy));
+        assertTrue(dispatcher.isRootOwnedSelector(IMarketEngine.pauseProgram.selector));
+        assertTrue(dispatcher.isRootOwnedSelector(IMarketEngine.depositToSide.selector));
+        assertTrue(dispatcher.isRootOwnedSelector(IMarketEngine.initializeMarket.selector));
+        (address pauseModule,) = dispatcher.getSelectorModule(IMarketEngine.pauseProgram.selector);
+        (address depositModule,) = dispatcher.getSelectorModule(IMarketEngine.depositToSide.selector);
+        (address initializeMarketModule,) = dispatcher.getSelectorModule(IMarketEngine.initializeMarket.selector);
         (address viewModule,) = dispatcher.getSelectorModule(bytes4(keccak256("getVaultBalances(bytes32)")));
         (address coreModule,) = dispatcher.getSelectorModule(IMarketEngine.upsertTemplate.selector);
         (address rollingModule,) = dispatcher.getSelectorModule(bytes4(keccak256("executeRollingRound(bytes32)")));
+        assertEq(pauseModule, address(0));
+        assertEq(depositModule, address(0));
+        assertEq(initializeMarketModule, address(0));
         assertTrue(viewModule != address(0));
         assertTrue(coreModule != address(0));
         assertTrue(rollingModule != address(0));
@@ -122,6 +131,8 @@ contract DeploymentScriptExecutionTest is Test {
 
     function test_upgradeMarketEngine_success() external {
         address proxy = _deployProductionFixture();
+        MockERC20 stake = new MockERC20();
+        _setBaseDeployEnv(address(stake));
         vm.setEnv("PROXY_ADDRESS", vm.toString(proxy));
         vm.setEnv("EXPECTED_CHAIN_ID", vm.toString(block.chainid));
         vm.setEnv("PRIVATE_KEY", "0");
@@ -137,6 +148,8 @@ contract DeploymentScriptExecutionTest is Test {
 
     function test_upgradeYieldRouting_success_withLmToggle() external {
         address proxy = _deployProductionFixture();
+        MockERC20 stake = new MockERC20();
+        _setBaseDeployEnv(address(stake));
         vm.setEnv("PROXY_ADDRESS", vm.toString(proxy));
         vm.setEnv("EXPECTED_CHAIN_ID", vm.toString(block.chainid));
         vm.setEnv("YIELD_ROUTER", vm.toString(makeAddr("yieldRouter")));

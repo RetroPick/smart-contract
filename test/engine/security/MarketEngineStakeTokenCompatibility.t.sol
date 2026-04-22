@@ -5,11 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {UnsafeUpgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
 import {IMarketEngine as MarketEngine} from "../../../src/engine/IMarketEngine.sol";
 import {MarketEngineDispatcher} from "../../../src/engine/MarketEngineDispatcher.sol";
-import {MarketEngineAdminModule} from "../../../src/engine/modules/MarketEngineAdminModule.sol";
 import {MarketEngineCoreLifecycleModule} from "../../../src/engine/modules/MarketEngineCoreLifecycleModule.sol";
-import {MarketEngineUserOpsClaimsModule} from "../../../src/engine/modules/MarketEngineUserOpsClaimsModule.sol";
-import {MarketEngineRollingLifecycleModule} from "../../../src/engine/modules/MarketEngineRollingLifecycleModule.sol";
-import {MarketEngineViewModule} from "../../../src/engine/modules/MarketEngineViewModule.sol";
 import {MarketTypes} from "../../../src/types/MarketTypes.sol";
 import {MockFeeOnTransferERC20} from "../../../src/test/MockFeeOnTransferERC20.sol";
 import {MockPriceOracle} from "../../../src/test/MockPriceOracle.sol";
@@ -51,14 +47,7 @@ contract MarketEngineStakeTokenCompatibilityTest is Test {
         MarketEngineDispatcher dispatcher = MarketEngineDispatcher(payable(proxy));
 
         vm.startPrank(admin);
-        _wireModules(
-            dispatcher,
-            address(new MarketEngineAdminModule()),
-            address(new MarketEngineViewModule()),
-            address(new MarketEngineUserOpsClaimsModule()),
-            address(new MarketEngineCoreLifecycleModule()),
-            address(new MarketEngineRollingLifecycleModule())
-        );
+        _wireModules(dispatcher, address(new MarketEngineCoreLifecycleModule()));
         vm.stopPrank();
 
         engine = MarketEngine(proxy);
@@ -124,23 +113,12 @@ contract MarketEngineStakeTokenCompatibilityTest is Test {
         p.oracleClass = MarketTypes.OracleClass.CHAINLINK_PRICE;
     }
 
-    function _wireModules(
-        MarketEngineDispatcher dispatcher,
-        address adminModule,
-        address viewModule,
-        address userOpsClaimsModule,
-        address coreLifecycleModule,
-        address rollingLifecycleModule
-    ) internal {
-        _allowAndRegister(dispatcher, adminModule);
-        _allowAndRegister(dispatcher, viewModule);
-        _allowAndRegister(dispatcher, userOpsClaimsModule);
+    function _wireModules(MarketEngineDispatcher dispatcher, address coreLifecycleModule) internal {
         _allowAndRegister(dispatcher, coreLifecycleModule);
-        _allowAndRegister(dispatcher, rollingLifecycleModule);
-
-        dispatcher.setSelectorModule(bytes4(keccak256("initializeMarket(bytes32)")), adminModule, false);
         dispatcher.setSelectorModule(MarketEngine.upsertTemplate.selector, coreLifecycleModule, false);
-        dispatcher.setSelectorModule(bytes4(keccak256("openEpoch(bytes32,uint64,uint64,uint64,uint64)")), coreLifecycleModule, false);
+        dispatcher.setSelectorModule(
+            bytes4(keccak256("openEpoch(bytes32,uint64,uint64,uint64,uint64)")), coreLifecycleModule, false
+        );
     }
 
     function _allowAndRegister(MarketEngineDispatcher dispatcher, address module) internal {

@@ -8,9 +8,10 @@ import {IMarketEngine} from "../../src/engine/IMarketEngine.sol";
 contract ValidateModular is Script {
     function run() external view {
         MarketEngineDispatcher engine = MarketEngineDispatcher(payable(vm.envAddress("ENGINE_PROXY")));
-        (address module, bool immutableSelector) = engine.getSelectorModule(bytes4(keccak256("pauseProgram(bool)")));
-        console2.log("pauseProgram module", module);
-        console2.log("pauseProgram immutable", immutableSelector);
+        console2.log("pauseProgram root-owned", engine.isRootOwnedSelector(IMarketEngine.pauseProgram.selector));
+        (address pauseModule, bool pauseImmutable) = engine.getSelectorModule(IMarketEngine.pauseProgram.selector);
+        console2.log("pauseProgram module (expected zero in V2)", pauseModule);
+        console2.log("pauseProgram immutable (expected false in V2)", pauseImmutable);
         (address moduleView,) = engine.getSelectorModule(bytes4(keccak256("getVaultBalances(bytes32)")));
         console2.log("getVaultBalances module", moduleView);
         (address moduleUpsert,) = engine.getSelectorModule(IMarketEngine.upsertTemplate.selector);

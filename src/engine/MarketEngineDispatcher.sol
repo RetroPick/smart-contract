@@ -191,6 +191,11 @@ contract MarketEngineDispatcher is
             || selector == IMarketEngine.claimMany.selector;
     }
 
+    /// @notice Returns true when a selector is executed directly on dispatcher bytecode rather than via delegated module routing.
+    function isRootOwnedSelector(bytes4 selector) external pure returns (bool) {
+        return _isRootOwnedSelector(selector);
+    }
+
     function _delegateForSelector(bytes4 selector) private {
         ModuleRegistryStorage storage $ = _moduleRegistryStorage();
         address module = $.selectorToModule[selector];

@@ -12,9 +12,17 @@ import {PreflightModular} from "../../script/modular/00_Preflight.s.sol";
 import {DeployYieldRouterV2} from "../../script/DeployYieldRouterV2.s.sol";
 import {DeployYieldRouterAaveV3} from "../../script/DeployYieldRouterAaveV3.s.sol";
 import {MarketEngineDispatcher} from "../../src/engine/MarketEngineDispatcher.sol";
+import {IMarketEngine} from "../../src/engine/IMarketEngine.sol";
+import {ScriptSelectorMatrix} from "../../script/ScriptSelectorMatrix.sol";
 import {MockERC20} from "../../src/test/MockERC20.sol";
 import {MockAToken} from "../../src/test/MockAToken.sol";
 import {MockAavePool} from "../../src/test/MockAavePool.sol";
+
+contract ScriptSelectorMatrixHarness {
+    function requireAll(address dispatcher) external view {
+        ScriptSelectorMatrix.requireAllDelegatedSelectorsWired(MarketEngineDispatcher(payable(dispatcher)));
+    }
+}
 
 /// forge-config: default.threads = 1
 contract ModularAndYieldScriptsTest is Test {
@@ -24,6 +32,11 @@ contract ModularAndYieldScriptsTest is Test {
     bytes32 private constant MODULES_WIRED_SIG = keccak256("ModulesWired(address)");
     bytes32 private constant SELECTOR_ROLLBACK_SIG = keccak256("SelectorRolledBack(address,bytes4,address)");
     bytes32 private constant YIELD_ROUTER_DEPLOYED_SIG = keccak256("YieldRouterDeployed(address)");
+    ScriptSelectorMatrixHarness private harness;
+
+    function setUp() public {
+        harness = new ScriptSelectorMatrixHarness();
+    }
 
     function test_modular_pipeline_endToEnd() external {
         MockERC20 stake = new MockERC20();
@@ -34,6 +47,8 @@ contract ModularAndYieldScriptsTest is Test {
 
         address proxy = _deployCoreAndGetProxy();
         vm.setEnv("ENGINE_PROXY", vm.toString(proxy));
+        vm.expectRevert();
+        harness.requireAll(proxy);
 
         (
             address adminModule,
@@ -54,6 +69,10 @@ contract ModularAndYieldScriptsTest is Test {
         validate.run();
 
         MarketEngineDispatcher dispatcher = MarketEngineDispatcher(payable(proxy));
+        assertFalse(dispatcher.isModuleApproved(adminModule));
+        assertFalse(dispatcher.isModuleApproved(userOpsClaimsModule));
+        (address pauseModule,) = dispatcher.getSelectorModule(IMarketEngine.pauseProgram.selector);
+        assertEq(pauseModule, address(0));
         (address vaultsModule,) = dispatcher.getSelectorModule(bytes4(keccak256("getVaultBalances(bytes32)")));
         assertEq(vaultsModule, viewModule);
 

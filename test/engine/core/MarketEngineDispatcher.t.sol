@@ -83,6 +83,52 @@ contract MarketEngineDispatcherTest is Test {
         engine.setSelectorModule(directSelector, address(module), false);
     }
 
+    function test_all_directSelectors_areRootOwnedAndUnmappable() public {
+        _registerMockModule();
+
+        bytes4[] memory selectors = new bytes4[](24);
+        uint256 i;
+        selectors[i++] = IMarketEngine.pauseProgram.selector;
+        selectors[i++] = IMarketEngine.setWorkerAuthority.selector;
+        selectors[i++] = IMarketEngine.setTreasury.selector;
+        selectors[i++] = IMarketEngine.setDepositExecutor.selector;
+        selectors[i++] = IMarketEngine.setYieldRouter.selector;
+        selectors[i++] = IMarketEngine.setRateOracle.selector;
+        selectors[i++] = IMarketEngine.setSmartDataOracle.selector;
+        selectors[i++] = IMarketEngine.setMacroOracle.selector;
+        selectors[i++] = IMarketEngine.setEquityOracle.selector;
+        selectors[i++] = IMarketEngine.resetOracleCursor.selector;
+        selectors[i++] = IMarketEngine.setLmRewardsEnabled.selector;
+        selectors[i++] = IMarketEngine.keeperClaimLmRewards.selector;
+        selectors[i++] = IMarketEngine.yieldEmergencyWithdraw.selector;
+        selectors[i++] = IMarketEngine.reconcileEpochRoutedPrincipal.selector;
+        selectors[i++] = IMarketEngine.recoverRoutedSettledClaims.selector;
+        selectors[i++] = IMarketEngine.finalizeRecoveredYield.selector;
+        selectors[i++] = IMarketEngine.reassignRecoveredBalance.selector;
+        selectors[i++] = IMarketEngine.resetYieldRouterFailures.selector;
+        selectors[i++] = IMarketEngine.initializeMarket.selector;
+        selectors[i++] = IMarketEngine.withdrawFees.selector;
+        selectors[i++] = IMarketEngine.depositToSide.selector;
+        selectors[i++] = IMarketEngine.depositToSideFor.selector;
+        selectors[i++] = IMarketEngine.switchSide.selector;
+        selectors[i++] = IMarketEngine.claim.selector;
+        require(i == 24, "direct selector length");
+
+        for (uint256 k; k < selectors.length; ++k) {
+            assertTrue(engine.isRootOwnedSelector(selectors[k]));
+            vm.prank(admin);
+            vm.expectRevert(abi.encodeWithSelector(MarketEngineState.SelectorImmutable.selector, selectors[k]));
+            engine.setSelectorModule(selectors[k], address(module), false);
+            (address mapped,) = engine.getSelectorModule(selectors[k]);
+            assertEq(mapped, address(0));
+        }
+
+        assertTrue(engine.isRootOwnedSelector(IMarketEngine.claimMany.selector));
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(MarketEngineState.SelectorImmutable.selector, IMarketEngine.claimMany.selector));
+        engine.setSelectorModule(IMarketEngine.claimMany.selector, address(module), false);
+    }
+
     function test_ImmutableSelectorCannotBeReplaced() public {
         _registerMockModule();
         bytes4 selector = bytes4(keccak256("getVaultBalances(bytes32)"));

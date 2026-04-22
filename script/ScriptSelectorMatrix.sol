@@ -6,6 +6,7 @@ import {IMarketEngine} from "../src/engine/IMarketEngine.sol";
 
 library ScriptSelectorMatrix {
     struct Modules {
+        // Kept for backwards-compatible script inputs; V2 runtime no longer delegate-routes these surfaces.
         address admin;
         address viewModule;
         address userOpsClaims;
@@ -14,15 +15,11 @@ library ScriptSelectorMatrix {
     }
 
     function wireAll(MarketEngineDispatcher dispatcher, Modules memory m) internal {
-        dispatcher.allowModuleCodeHash(keccak256(m.admin.code));
         dispatcher.allowModuleCodeHash(keccak256(m.viewModule.code));
-        dispatcher.allowModuleCodeHash(keccak256(m.userOpsClaims.code));
         dispatcher.allowModuleCodeHash(keccak256(m.coreLifecycle.code));
         dispatcher.allowModuleCodeHash(keccak256(m.rollingLifecycle.code));
 
-        dispatcher.registerModule(m.admin, keccak256(m.admin.code));
         dispatcher.registerModule(m.viewModule, keccak256(m.viewModule.code));
-        dispatcher.registerModule(m.userOpsClaims, keccak256(m.userOpsClaims.code));
         dispatcher.registerModule(m.coreLifecycle, keccak256(m.coreLifecycle.code));
         dispatcher.registerModule(m.rollingLifecycle, keccak256(m.rollingLifecycle.code));
 
