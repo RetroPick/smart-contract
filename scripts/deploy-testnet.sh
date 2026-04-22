@@ -3,12 +3,17 @@
 #
 # Prerequisites:
 #   - forge, cast (Foundry)
-#   - `forge build` succeeds; run with `--ffi` (required by OpenZeppelin upgrades plugin)
+#   - `FOUNDRY_PROFILE=production forge build` (matches foundry.toml [profile.production] — optimizer + via_ir)
+#   - Run script with `--ffi` (required by OpenZeppelin upgrades plugin)
+#
+# Block explorer verify (--verify):
+#   - Set ETHERSCAN_API_KEY. On Base Sepolia and other L2s, if verification fails, use chain-specific
+#     `forge verify-contract --verifier-url` or add [etherscan] entries in foundry.toml for that chain.
 #
 # Environment (required for broadcast; simulation still needs RPC):
 #   RPC_URL                 HTTPS RPC for the testnet
 #   EXPECTED_CHAIN_ID       expected testnet chain id (required)
-#   DEPLOY_ACCOUNT          Foundry keystore account name (passed as --account)
+#   DEPLOY_ACCOUNT | KEYSTORE_NAME   Foundry keystore name (passed as --account; DEPLOY_ACCOUNT wins)
 #   SEQUENCER_FEED          Chainlink L2 sequencer uptime feed, or 0x000... on L1 testnets
 #   ADMIN, TREASURY, WORKER addresses
 #   STAKE_TOKEN             stake ERC20, unless DEPLOY_FAUCET=1 (see script/test/DeployTestnet.s.sol)
@@ -17,12 +22,14 @@
 #
 # Optional:
 #   DEPLOY_FAUCET, SMOKE_FEED_ADDRESS, SMOKE_MAX_AGE_SECONDS, GAS_LIMIT, FOUNDRY_ETH_RPC_URL (alias)
+#   ETH_PASSWORD            If set, exported for non-interactive unlock of the Foundry keystore used with --account
+#                         (if your password contains $ ( ) ` or ;, do not put it in .env — set ETH_PASSWORD in the shell)
 #
-# Usage:
-#   ./deploy-testnet.sh              # dry-run (simulation only)
-#   ./deploy-testnet.sh --broadcast  # send transactions (needs DEPLOY_ACCOUNT + unlocked keystore)
-#   ./deploy-testnet.sh --broadcast --verify  # broadcast + explorer verify (needs ETHERSCAN_API_KEY)
-#   DEPLOY_FAUCET=1 ./deploy-testnet.sh --broadcast  # deploy faucet + demo token and use it as STAKE_TOKEN
+# Usage (from repo root):
+#   ./scripts/deploy-testnet.sh              # dry-run (simulation only)
+#   ./scripts/deploy-testnet.sh --broadcast  # send transactions (needs DEPLOY_ACCOUNT or KEYSTORE_NAME)
+#   ./scripts/deploy-testnet.sh --broadcast --verify  # broadcast + explorer verify (needs ETHERSCAN_API_KEY)
+#   DEPLOY_FAUCET=1 ./scripts/deploy-testnet.sh --broadcast  # faucet + demo token as STAKE_TOKEN
 
 set -euo pipefail
 
@@ -58,8 +65,13 @@ if [[ -f .env ]]; then
   done < .env
 fi
 
+# Non-interactive keystore: Foundry/cast use ETH_PASSWORD when --account is set.
+if [[ -n "${ETH_PASSWORD:-}" ]]; then
+  export ETH_PASSWORD
+fi
+
 RPC_URL="${RPC_URL:-${FOUNDRY_ETH_RPC_URL:-}}"
-ACCOUNT="${DEPLOY_ACCOUNT:-}"
+ACCOUNT="${DEPLOY_ACCOUNT:-${KEYSTORE_NAME:-}}"
 GAS_LIMIT="${GAS_LIMIT:-50000000}"
 EXPECTED_CHAIN_ID="${EXPECTED_CHAIN_ID:-}"
 MAINNET_CHAIN_ID="${MAINNET_CHAIN_ID:-1}"
@@ -124,7 +136,7 @@ FORGE_ARGS=(
 
 if [[ "$BROADCAST" -eq 1 ]]; then
   if [[ -z "$ACCOUNT" ]]; then
-    echo "error: set DEPLOY_ACCOUNT (Foundry keystore name) for --broadcast" >&2
+    echo "error: set DEPLOY_ACCOUNT or KEYSTORE_NAME (Foundry keystore name) for --broadcast" >&2
     exit 1
   fi
   FORGE_ARGS+=(--account "$ACCOUNT" --broadcast --slow)

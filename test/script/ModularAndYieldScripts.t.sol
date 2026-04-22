@@ -36,7 +36,7 @@ contract ModularAndYieldScriptsTest is ModularEnvTestBase {
     }
 
     /// @dev Exact names for static test↔symbol matchers (`setUp`, `_rollbackSelectorAndAssert`, contract name).
-    function test_ModularAndYieldScriptsTest() public {
+    function test_ModularAndYieldScriptsTest() public pure {
         assertTrue(true);
     }
 
@@ -47,7 +47,7 @@ contract ModularAndYieldScriptsTest is ModularEnvTestBase {
     }
 
     /// @dev Name matches `_rollbackSelectorAndAssert`; execution is `test_modular_pipeline_endToEnd`.
-    function test__rollbackSelectorAndAssert() public {
+    function test__rollbackSelectorAndAssert() public pure {
         assertTrue(true);
     }
 

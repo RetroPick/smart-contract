@@ -43,3 +43,8 @@ fuzz = { runs = 256 }
 [lint]
 mixed_case_exceptions = ["ERC", "URI", "__gap"]
 exclude_lints = ["unwrapped-modifier-logic", "asm-keccak256"]
+
+# Basescan (Base / Base Sepolia) — same API key style as Etherscan; set ETHERSCAN_API_KEY in the environment.
+# Used by `forge script ... --verify` and `scripts/verify-base-sepolia-contracts.sh`.
+[etherscan]
+base_sepolia = { key = "${ETHERSCAN_API_KEY}", url = "https://api-sepolia.basescan.org/api" }

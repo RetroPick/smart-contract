@@ -5,12 +5,15 @@
 #
 # Prerequisites:
 #   - forge, cast (Foundry)
+#   - `FOUNDRY_PROFILE=production forge build` for bytecode aligned with [profile.production] in foundry.toml
 #   - `forge test` green; storage/layout checks for upgrades as per your checklist
+#
+# Block explorer verify: see deploy-testnet.sh header for ETHERSCAN_API_KEY / L2 verify-url notes.
 #
 # Environment (required):
 #   RPC_URL                 HTTPS RPC for the chain
 #   EXPECTED_CHAIN_ID       expected chain id (defaults to 1)
-#   DEPLOY_ACCOUNT          Foundry keystore account name
+#   DEPLOY_ACCOUNT | KEYSTORE_NAME   Foundry keystore name (DEPLOY_ACCOUNT wins)
 #   STAKE_TOKEN
 #   SEQUENCER_FEED          0x000... on L1; Chainlink sequencer uptime feed on L2
 #   ADMIN, TREASURY, WORKER
@@ -19,10 +22,10 @@
 #
 # Optional: GAS_LIMIT, ETHERSCAN_API_KEY (for --verify)
 #
-# Usage:
-#   ./deploy-mainnet.sh # dry-run only (default)
-#   ALLOW_MAINNET_BROADCAST=yes ./deploy-mainnet.sh --broadcast
-#   ALLOW_MAINNET_BROADCAST=yes ./deploy-mainnet.sh --broadcast --verify
+# Usage (from repo root):
+#   ./scripts/deploy-mainnet.sh # dry-run only (default)
+#   ALLOW_MAINNET_BROADCAST=yes ./scripts/deploy-mainnet.sh --broadcast
+#   ALLOW_MAINNET_BROADCAST=yes ./scripts/deploy-mainnet.sh --broadcast --verify
 #
 # Mainnet broadcasts are blocked unless ALLOW_MAINNET_BROADCAST=yes to reduce accidents.
 
@@ -61,7 +64,7 @@ if [[ -f .env ]]; then
 fi
 
 RPC_URL="${RPC_URL:-${FOUNDRY_ETH_RPC_URL:-}}"
-ACCOUNT="${DEPLOY_ACCOUNT:-}"
+ACCOUNT="${DEPLOY_ACCOUNT:-${KEYSTORE_NAME:-}}"
 GAS_LIMIT="${GAS_LIMIT:-50000000}"
 EXPECTED_CHAIN_ID="${EXPECTED_CHAIN_ID:-1}"
 SCRIPT_PATH="script/production/DeployProduction.s.sol:DeployProduction"
@@ -109,7 +112,7 @@ if [[ "$BROADCAST" -eq 1 ]]; then
     exit 1
   fi
   if [[ -z "$ACCOUNT" ]]; then
-    echo "error: set DEPLOY_ACCOUNT (Foundry keystore name) for --broadcast" >&2
+    echo "error: set DEPLOY_ACCOUNT or KEYSTORE_NAME (Foundry keystore name) for --broadcast" >&2
     exit 1
   fi
 fi

@@ -54,7 +54,7 @@ contract MockBrokenYieldRouter is IYieldRouterV2 {
         external
         pure
         override
-        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+        returns (uint256, uint256, uint256)
     {
         revert WithdrawAlwaysFails();
     }
@@ -63,7 +63,7 @@ contract MockBrokenYieldRouter is IYieldRouterV2 {
         external
         pure
         override
-        returns (uint256 grossAmount, uint256 principalConsumed, uint256 attributionUnitsBurned)
+        returns (uint256, uint256, uint256)
     {
         revert WithdrawAlwaysFails();
     }
