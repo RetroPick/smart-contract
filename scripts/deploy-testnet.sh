@@ -3,7 +3,8 @@
 #
 # Prerequisites:
 #   - forge, cast (Foundry)
-#   - `FOUNDRY_PROFILE=production forge build` (matches foundry.toml [profile.production] — optimizer + via_ir)
+#   - `FOUNDRY_PROFILE=upgrades forge build` (required for OZ upgrades AST/build-info validation)
+#   - Node.js / `npx` available for the OpenZeppelin upgrades validator
 #   - Run script with `--ffi` (required by OpenZeppelin upgrades plugin)
 #
 # Block explorer verify (--verify):
@@ -40,6 +41,10 @@ else
   ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 fi
 cd "$ROOT"
+
+if [[ -d "$ROOT/.tools/node/bin" ]]; then
+  export PATH="$ROOT/.tools/node/bin:${PATH}"
+fi
 
 if [[ -f .env ]]; then
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -100,6 +105,10 @@ done
 
 if [[ -z "$RPC_URL" ]]; then
   echo "error: set RPC_URL (or FOUNDRY_ETH_RPC_URL) in the environment or .env" >&2
+  exit 1
+fi
+if ! command -v npx &>/dev/null; then
+  echo "error: npx not in PATH; install Node.js so OpenZeppelin upgrades validation can run" >&2
   exit 1
 fi
 
