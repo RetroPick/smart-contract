@@ -35,7 +35,7 @@ test-ledger
 .reports/*
 .cache/*
 .scripts/*
-lib/*
+
 .audit/*
 .dev/*
 .operator/*
