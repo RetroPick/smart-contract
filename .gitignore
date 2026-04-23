@@ -7,56 +7,6 @@ out/
 /broadcast/*/31337/
 /broadcast/**/dry-run/
 
-# Docs
-docs/
 
 # Dotenv file
 .env
-node_modules
-.pnpm-store
-.env.local
-.env.*.local
-target
-dist
-.next
-coverage
-.anchor
-.DS_Store
-*.log
-test-ledger
-.cursor
-.idea
-.vscode
-.docs
-
-.docs/*
-
-.cursor/*
-.reports/*
-.cache/*
-.scripts/*
-
-.audit/*
-.dev/*
-.operator/*
-.reports/*
-
-# Added by code-review-graph
-.code-review-graph/
-
-# Local AI / editor tooling
-.claude/
-.mcp.json
-.cursorrules
-CLAUDE.md
-
-# Local graph / generated review artifacts
-.code-review-graph.yml
-.codereviewignore
-smartcontract.html
-smartcontract.epub
-
-.tools/
-.tools/
-
-.tools/
