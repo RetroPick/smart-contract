@@ -67,6 +67,17 @@ S3 Memory status check — user asked "memory" to see what has been persisted ac
 Access 444k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
 
+## Learned User Preferences
+
+- Expects explicit distinction between gasless-for-the-user (relayer/sponsor pays) and zero gas on-chain; state changes always consume native gas on the deployment chain.
+
+## Learned Workspace Facts
+
+- Registry and embedded testnet flows target Base Sepolia (`84532`); Ethereum Sepolia (`11155111`) native ETH does not pay gas for Base Sepolia contract calls unless the product is redeployed or bridged to that chain.
+- `TokenFaucet.requestWithSig` is intended for any caller (relayer pays gas); gasless UX uses API relay env (`FAUCET_RELAY_ENABLED`, funded Base Sepolia relayer key) plus user EIP-712 signatures—no redeploy when the live faucet already matches this interface.
+- Canonical `TokenFaucet` JSON ABI for integrators: `package/abi/TokenFaucet.json` (and backend copy); keep `nonces` / `requestWithSig` aligned with `TokenFaucet.sol` after contract changes.
+- EVM contract edits cannot remove gas for state updates globally; they only change who submits the paying transaction (user EOA, relayer, treasury, or paymaster path).
+
 <!-- code-review-graph MCP tools -->
 ## MCP Tools: code-review-graph
 
